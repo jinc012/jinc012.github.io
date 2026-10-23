@@ -1,6 +1,5 @@
 (function () {
   "use strict";
-  var root = document.documentElement;
   var store = {
     get: function (k) {
       try {
@@ -16,41 +15,13 @@
     }
   };
 
-  /* ---------- 動畫開關 ---------- */
+  /* ---------- 減少動態效果（依系統設定） ---------- */
   var mq = window.matchMedia
     ? window.matchMedia("(prefers-reduced-motion: reduce)")
     : { matches: false };
-  var motionBtn = document.getElementById("motionBtn");
-  if (store.get("hkd-motion") === "off") root.dataset.motion = "off";
   function reduced() {
-    return mq.matches || root.dataset.motion === "off";
+    return mq.matches;
   }
-  function syncMotionBtn() {
-    if (mq.matches) {
-      motionBtn.textContent = "已依系統設定減少動態效果";
-      motionBtn.disabled = true;
-      motionBtn.setAttribute("aria-pressed", "true");
-    } else {
-      var off = root.dataset.motion === "off";
-      motionBtn.disabled = false;
-      motionBtn.textContent = off
-        ? "動畫：關（點一下打開）"
-        : "動畫：開（點一下關閉）";
-      motionBtn.setAttribute("aria-pressed", off ? "true" : "false");
-    }
-  }
-  motionBtn.addEventListener("click", function () {
-    if (root.dataset.motion === "off") {
-      delete root.dataset.motion;
-      store.set("hkd-motion", "on");
-    } else {
-      root.dataset.motion = "off";
-      store.set("hkd-motion", "off");
-    }
-    syncMotionBtn();
-  });
-  if (mq.addEventListener) mq.addEventListener("change", syncMotionBtn);
-  syncMotionBtn();
 
   /* ---------- 小工具 ---------- */
   function toMin(t) {
@@ -73,8 +44,7 @@
   }
   function mapUrl(q) {
     return (
-      "https://www.google.com/maps/search/?api=1&query=" +
-      encodeURIComponent(q)
+      "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(q)
     );
   }
   function ico(id) {
@@ -882,11 +852,7 @@
     var stay = s.lab
       ? s.lab
       : s.stay
-        ? "停留 " +
-          fmt(s.stay) +
-          "・" +
-          hhmm(toMin(s.t) + s.stay) +
-          " 離開"
+        ? "停留 " + fmt(s.stay) + "・" + hhmm(toMin(s.t) + s.stay) + " 離開"
         : "";
     return (
       '<li class="stop" style="--i:' +
@@ -906,9 +872,7 @@
       '<div class="t-head"><h4>' +
       s.n +
       "</h4>" +
-      (s.must
-        ? '<span class="must">' + ico("i-star") + "必去</span>"
-        : "") +
+      (s.must ? '<span class="must">' + ico("i-star") + "必去</span>" : "") +
       "</div>" +
       (s.sub ? '<p class="t-sub">' + s.sub + "</p>" : "") +
       (stay ? '<p class="t-stay">' + stay + "</p>" : "") +
@@ -995,20 +959,14 @@
       '<div class="meta">' +
       (drive
         ? '<span class="pill">' +
-          ico("i-car").replace(
-            "<svg",
-            '<svg style="width:15px;height:15px"'
-          ) +
+          ico("i-car").replace("<svg", '<svg style="width:15px;height:15px"') +
           "開車約 " +
           fmt(drive) +
           "</span>"
         : "") +
       (musts
         ? '<span class="pill">' +
-          ico("i-star").replace(
-            "<svg",
-            '<svg style="width:14px;height:14px"'
-          ) +
+          ico("i-star").replace("<svg", '<svg style="width:14px;height:14px"') +
           "必去 " +
           musts +
           " 處</span>"
@@ -1238,46 +1196,42 @@
     }
   ];
   var HC = ["--mizu", "--yamabuki", "--wakatake", "--coral"];
-  document.getElementById("hotels").innerHTML = HOTELS.map(
-    function (h, i) {
-      return (
-        '<li class="card hotel">' +
-        '<div class="hotel-n" style="--c:var(' +
-        HC[i % 4] +
-        ')"><b>' +
-        h.nights +
-        "</b><span>晚</span></div>" +
-        '<div style="min-width:0">' +
-        "<h3>" +
-        h.n +
-        "</h3>" +
-        '<p class="jp">' +
-        h.jp +
-        "・" +
-        h.area +
-        "</p>" +
-        '<p class="dates">' +
-        h.in +
-        " 入住 → " +
-        h.out +
-        " 退房</p>" +
-        '<div class="hotel-foot">' +
-        (h.onsen
-          ? '<span class="onsen">' + ico("i-onsen") + "溫泉</span>"
-          : "") +
-        "<span>預計 " +
-        h.arrive +
-        " 抵達</span>" +
-        '<a class="mini-link" href="' +
-        mapUrl(h.q) +
-        '" target="_blank" rel="noopener">' +
-        ico("i-pin") +
-        "地圖</a>" +
-        "</div>" +
-        "</div></li>"
-      );
-    }
-  ).join("");
+  document.getElementById("hotels").innerHTML = HOTELS.map(function (h, i) {
+    return (
+      '<li class="card hotel">' +
+      '<div class="hotel-n" style="--c:var(' +
+      HC[i % 4] +
+      ')"><b>' +
+      h.nights +
+      "</b><span>晚</span></div>" +
+      '<div style="min-width:0">' +
+      "<h3>" +
+      h.n +
+      "</h3>" +
+      '<p class="jp">' +
+      h.jp +
+      "・" +
+      h.area +
+      "</p>" +
+      '<p class="dates">' +
+      h.in +
+      " 入住 → " +
+      h.out +
+      " 退房</p>" +
+      '<div class="hotel-foot">' +
+      (h.onsen ? '<span class="onsen">' + ico("i-onsen") + "溫泉</span>" : "") +
+      "<span>預計 " +
+      h.arrive +
+      " 抵達</span>" +
+      '<a class="mini-link" href="' +
+      mapUrl(h.q) +
+      '" target="_blank" rel="noopener">' +
+      ico("i-pin") +
+      "地圖</a>" +
+      "</div>" +
+      "</div></li>"
+    );
+  }).join("");
 
   /* ---------- 待辦清單 ---------- */
   var TODO = [
@@ -1285,22 +1239,14 @@
       g: "證件與入境",
       items: [
         ["passport", "確認護照效期"],
-        [
-          "vjw",
-          "填寫 Visit Japan Web",
-          "入境、海關資料先填好，落地掃 QR Code"
-        ],
+        ["vjw", "填寫 Visit Japan Web", "入境、海關資料先填好，落地掃 QR Code"],
         ["insure", "買旅遊平安險"]
       ]
     },
     {
       g: "開車",
       items: [
-        [
-          "license",
-          "申請台灣駕照日文譯本",
-          "到監理站辦，和台灣駕照一起帶"
-        ],
+        ["license", "申請台灣駕照日文譯本", "到監理站辦，和台灣駕照一起帶"],
         ["rental", "預約租車", "確認取車地點，4/29 在女滿別機場還車"],
         [
           "roads",
@@ -1460,9 +1406,7 @@
   renderTodo();
 
   /* ---------- 選單跟著捲動 ---------- */
-  var links = Array.prototype.slice.call(
-    document.querySelectorAll(".nav a")
-  );
+  var links = Array.prototype.slice.call(document.querySelectorAll(".nav a"));
   var sections = links.map(function (a) {
     return document.querySelector(a.getAttribute("href"));
   });
@@ -1488,9 +1432,7 @@
     });
   }
   function onScroll() {
-    var navH = document
-      .querySelector(".topbar")
-      .getBoundingClientRect().height;
+    var navH = document.querySelector(".topbar").getBoundingClientRect().height;
     daybar.classList.toggle(
       "stuck",
       daybar.getBoundingClientRect().top <= navH + 0.5 &&

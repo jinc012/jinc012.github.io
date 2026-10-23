@@ -1119,30 +1119,6 @@ section {
   border: 2.5px dashed var(--ink);
 }
 
-/* ---------- 頁尾 ---------- */
-.foot {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 13.5px;
-  color: var(--ink-soft);
-  border-top: var(--line) dashed var(--ink);
-  padding-top: 20px;
-}
-.foot button {
-  border: 2.5px solid var(--ink);
-  border-radius: 999px;
-  background: var(--paper);
-  color: var(--ink);
-  padding: 5px 14px;
-  cursor: pointer;
-  font-size: 14px;
-}
-.foot button[aria-pressed="true"] {
-  background: var(--wakatake);
-}
-
 /* ---------- 插圖動畫 ---------- */
 .a-drift {
   animation: drift 9s ease-in-out infinite alternate;
@@ -1385,7 +1361,7 @@ section {
   }
 }
 
-/* 減少動態效果：系統設定或頁面開關 */
+/* 減少動態效果：依系統設定 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -1396,13 +1372,4 @@ section {
   html {
     scroll-behavior: auto;
   }
-}
-html[data-motion="off"] *,
-html[data-motion="off"] *::before,
-html[data-motion="off"] *::after {
-  animation: none !important;
-  transition: none !important;
-}
-html[data-motion="off"] {
-  scroll-behavior: auto;
 }
