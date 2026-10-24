@@ -11,6 +11,7 @@
       name="description"
       content="2027/04/22 – 05/01 北海道 10 天 9 夜自駕行程"
     />
+    <meta name="theme-color" content="#FFFCF6" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -198,6 +199,39 @@
             <path d="M8 9l1.5 1.5L12 8M8 15l1.5 1.5L12 14M14 9.5h3M14 15.5h3" />
           </g>
         </symbol>
+        <symbol id="i-coin" viewBox="0 0 24 24">
+          <g
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="9" fill="#FFFCF6" />
+            <path
+              d="M8.6 7.2L12 11.6l3.4-4.4M12 11.6V17M9.2 12.2h5.6M9.2 14.8h5.6"
+            />
+          </g>
+        </symbol>
+        <symbol id="i-chev" viewBox="0 0 24 24">
+          <path
+            d="M6 9.5l6 6 6-6"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </symbol>
+        <symbol id="i-x" viewBox="0 0 24 24">
+          <path
+            d="M6.5 6.5l11 11M17.5 6.5l-11 11"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="3"
+            stroke-linecap="round"
+          />
+        </symbol>
         <symbol id="i-route" viewBox="0 0 24 24">
           <g
             fill="none"
@@ -242,6 +276,7 @@
           <a href="#home" class="on">首頁</a>
           <a href="#flights">航班</a>
           <a href="#days">行程</a>
+          <a href="#money">花費</a>
           <a href="#stay">住宿</a>
           <a href="#todo">清單</a>
         </nav>
@@ -754,6 +789,233 @@
         <div class="panel" id="panel" role="tabpanel" tabindex="-1"></div>
       </section>
 
+      <!-- 旅費記帳 -->
+      <section id="money" aria-labelledby="h-money">
+        <div class="sec-head">
+          <span class="sec-ico" style="--c: var(--yamabuki)"
+            ><svg aria-hidden="true"><use href="#i-coin" /></svg
+          ></span>
+          <div>
+            <h2 id="h-money">旅費記帳</h2>
+            <small>おこづかいちょう</small>
+          </div>
+        </div>
+        <div class="money-wrap">
+          <div class="card share" id="share">
+            <div class="share-head">
+              <h3>旅伴共用</h3>
+              <span class="sync" data-sync data-state="local"
+                ><i aria-hidden="true"></i><span>只存在這台裝置</span></span
+              >
+            </div>
+            <p class="sh-detail" id="shDetail" hidden></p>
+
+            <div id="shNoCfg" hidden>
+              <p>
+                記帳和清單現在只存在這台裝置。要和旅伴共用，請照 README.md
+                的步驟設定 Firebase，並把網站放上 GitHub Pages。
+              </p>
+            </div>
+
+            <div class="sh-col" id="shJoin" hidden>
+              <p>
+                建立一本共用帳本，再把邀請連結傳給旅伴。大家記的帳、勾的清單都會即時同步。
+              </p>
+              <div class="sh-row">
+                <button type="button" class="btn pri" id="shCreate">
+                  建立共用帳本
+                </button>
+              </div>
+              <form class="sh-field" id="shJoinForm" novalidate>
+                <label for="shCode">旅伴已經建好了？把邀請連結貼在這裡</label>
+                <div class="sh-row">
+                  <input
+                    class="sh-input"
+                    id="shCode"
+                    type="text"
+                    autocomplete="off"
+                    placeholder="https://…#trip=…"
+                  /><button type="submit" class="btn">加入</button>
+                </div>
+                <p class="sh-err" id="shJoinErr" hidden>
+                  看不懂這個連結，請貼上旅伴傳來的完整邀請連結。
+                </p>
+              </form>
+            </div>
+
+            <div class="sh-col" id="shOn" hidden>
+              <div class="sh-field">
+                <label for="myName">你的名字（會標在你記的帳上）</label>
+                <input
+                  class="sh-input"
+                  id="myName"
+                  type="text"
+                  maxlength="12"
+                  autocomplete="nickname"
+                  placeholder="例如：小美"
+                />
+              </div>
+              <div class="sh-row">
+                <button type="button" class="btn pri" id="shInvite">
+                  複製邀請連結
+                </button>
+                <p class="hint" id="shInviteMsg" role="status"></p>
+              </div>
+              <label class="sr" for="shLink">邀請連結</label>
+              <input class="sh-input" id="shLink" type="text" readonly hidden />
+              <p class="hint">
+                拿到連結的人都能看到和修改這本帳，只傳給一起去的旅伴。
+              </p>
+              <div class="sh-box" id="shMigrate" hidden>
+                <p>這台裝置還有 <span id="shMigN"></span> 沒放進共用帳本。</p>
+                <div class="sh-row">
+                  <button type="button" class="btn pri sm" id="shMigYes">
+                    加進共用帳本</button
+                  ><button type="button" class="btn sm" id="shMigNo">
+                    不用了
+                  </button>
+                </div>
+              </div>
+              <div class="sh-row">
+                <button type="button" class="btn sm" id="shLeave">
+                  離開這本共用帳本
+                </button>
+              </div>
+              <div class="sh-box" id="shLeaveAsk" hidden>
+                <p>
+                  離開後這台裝置會改回只存本機。共用帳本裡的資料不會被刪除，之後用邀請連結可以再加入。
+                </p>
+                <div class="sh-row">
+                  <button type="button" class="btn sm" id="shLeaveYes">
+                    確定離開</button
+                  ><button type="button" class="btn pri sm" id="shLeaveNo">
+                    取消
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card money">
+            <div class="m-total">
+              <p class="m-lab">目前一共花了<span id="mCount"></span></p>
+              <p class="m-big" id="mTotal">¥0</p>
+              <p class="m-twd">
+                <span>約 <span id="mTwd">NT$0</span></span
+                ><span class="m-rate"
+                  ><label for="rate">匯率 1 日圓 =</label
+                  ><input
+                    id="rate"
+                    type="text"
+                    inputmode="decimal"
+                    autocomplete="off"
+                    value="0.21"
+                  /><span>台幣</span></span
+                >
+              </p>
+            </div>
+            <div class="m-empty" id="mEmpty">
+              <svg viewBox="0 0 80 70" aria-hidden="true">
+                <g class="a-hop">
+                  <circle
+                    cx="66"
+                    cy="12"
+                    r="8"
+                    fill="var(--yamabuki)"
+                    class="k2"
+                  />
+                  <path
+                    d="M63 8.5l3 4 3-4M66 12.5v5M63.5 13.5h5"
+                    fill="none"
+                    class="k2"
+                    stroke-width="1.8"
+                  />
+                </g>
+                <path
+                  d="M12 31Q7 64 40 65Q73 64 68 31Z"
+                  fill="var(--coral)"
+                  class="k"
+                />
+                <path
+                  d="M12 31Q40 15 68 31"
+                  fill="none"
+                  stroke="var(--ink)"
+                  stroke-width="9"
+                  stroke-linecap="round"
+                />
+                <path
+                  d="M12 31Q40 15 68 31"
+                  fill="none"
+                  stroke="var(--yamabuki)"
+                  stroke-width="3.5"
+                  stroke-linecap="round"
+                />
+                <circle
+                  cx="36.5"
+                  cy="18"
+                  r="4.5"
+                  fill="var(--yamabuki)"
+                  class="k2"
+                />
+                <circle
+                  cx="43.5"
+                  cy="18"
+                  r="4.5"
+                  fill="var(--yamabuki)"
+                  class="k2"
+                />
+                <g class="a-eyes">
+                  <circle cx="31" cy="43" r="2.2" fill="var(--ink)" />
+                  <circle cx="49" cy="43" r="2.2" fill="var(--ink)" />
+                </g>
+                <ellipse
+                  cx="25"
+                  cy="49"
+                  rx="3.6"
+                  ry="2.4"
+                  fill="var(--coral-pale)"
+                />
+                <ellipse
+                  cx="55"
+                  cy="49"
+                  rx="3.6"
+                  ry="2.4"
+                  fill="var(--coral-pale)"
+                />
+                <path
+                  d="M36 49q4 3.6 8 0"
+                  fill="none"
+                  class="k2"
+                  stroke-width="2.2"
+                />
+              </svg>
+              <p>
+                還沒有記錄。在每日行程裡，點景點卡片下方的「記帳」就能記一筆，這裡會按天數和分類加總。
+              </p>
+            </div>
+            <div class="m-body" id="mBody" hidden>
+              <div>
+                <h3>分類</h3>
+                <div class="m-stack" id="mStack" aria-hidden="true"></div>
+                <ul class="m-cats" id="mCats"></ul>
+              </div>
+              <div>
+                <h3>每天花多少</h3>
+                <ul class="m-days" id="mDays"></ul>
+              </div>
+              <div class="m-actions">
+                <button type="button" id="mCopy">複製全部明細</button>
+                <p id="mCopyMsg" role="status"></p>
+              </div>
+              <label class="sr" for="mCopyText">記帳明細</label>
+              <textarea id="mCopyText" readonly hidden></textarea>
+            </div>
+            <p class="m-warn" id="mWarn" hidden>
+              這個瀏覽器沒辦法在本機存資料（可能開了無痕模式），關掉頁面後，記錄和加入的共用帳本都要重來。
+            </p>
+          </div>
+        </div>
+      </section>
+
       <!-- 住宿 -->
       <section id="stay" aria-labelledby="h-stay">
         <div class="sec-head">
@@ -786,6 +1048,11 @@
             <div class="bar" aria-hidden="true">
               <i id="tBar" class="zero"></i>
             </div>
+            <p class="todo-sync" id="todoSync" hidden>
+              <span class="sync" data-sync data-state="local"
+                ><i aria-hidden="true"></i><span>只存在這台裝置</span></span
+              >清單和旅伴共用中
+            </p>
           </div>
           <p class="all-done" id="allDone" hidden>全部準備好了，北海道等你！</p>
           <div id="todoGroups"></div>
@@ -804,6 +1071,15 @@
       </section>
     </main>
 
+    <div class="toast" id="toast" hidden>
+      <div class="toast-in" role="status">
+        <span id="toastMsg"></span
+        ><button type="button" id="toastUndo">復原</button>
+      </div>
+    </div>
+
+    <!-- 共用資料庫設定（Firebase），照 README.md 填好 -->
+    <script src="js/config.js"></script>
     <script src="js/main.js"></script>
   </body>
 </html>

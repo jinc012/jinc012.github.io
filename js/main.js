@@ -12,6 +12,11 @@
       try {
         localStorage.setItem(k, JSON.stringify(v));
       } catch (e) {}
+    },
+    del: function (k) {
+      try {
+        localStorage.removeItem(k);
+      } catch (e) {}
     }
   };
 
@@ -835,13 +840,313 @@
     air: "i-plane"
   };
 
+  /* ---------- 記帳與清單：資料 ---------- */
+  var CATS = [
+    { id: "food", lab: "餐飲", c: "--yamabuki" },
+    { id: "ticket", lab: "門票", c: "--wakatake" },
+    { id: "move", lab: "交通", c: "--mizu" },
+    { id: "shop", lab: "購物", c: "--coral" },
+    { id: "stay", lab: "住宿", c: "--coral-pale" },
+    { id: "etc", lab: "其他", c: "--paper" }
+  ];
+  var CATMAP = {};
+  CATS.forEach(function (c) {
+    CATMAP[c.id] = c;
+  });
+  function catOf(id) {
+    return CATMAP[id] || CATMAP.etc;
+  }
+  var DEFCAT = {
+    spot: "ticket",
+    food: "food",
+    shop: "shop",
+    hotel: "stay",
+    air: "move"
+  };
+
+  /* 共用資料庫設定：config.js 會放 window.TRIP_CONFIG */
+  var SDK_VER = "12.19.0";
+  var CFG = window.TRIP_CONFIG || {};
+  var FB = CFG.firebase || {};
+  var HAS_CLOUD = !!(FB.apiKey && FB.projectId);
+  var CODE_RE = /^[a-z0-9]{24,64}$/;
+  var canSave = (function () {
+    try {
+      localStorage.setItem("hkd-t", "1");
+      localStorage.removeItem("hkd-t");
+      return true;
+    } catch (e) {
+      return false;
+    }
+  })();
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }[c];
+    });
+  }
+  function uid() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+  function newCode() {
+    var abc = "abcdefghijkmnpqrstuvwxyz23456789",
+      a = new Uint8Array(26),
+      s = "";
+    if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(a);
+    else
+      for (var j = 0; j < a.length; j++) a[j] = Math.floor(Math.random() * 256);
+    for (var i = 0; i < a.length; i++) s += abc[a[i] % 32];
+    return s;
+  }
+
+  /* 邀請連結 #trip=代碼 → 記住這本共用帳本，並把代碼從網址列拿掉 */
+  var tripCode = (function () {
+    var m = /(?:^#|&)trip=([a-z0-9]{24,64})/.exec(location.hash);
+    if (m) {
+      store.set("hkd-trip", m[1]);
+      try {
+        history.replaceState(null, "", location.href.split("#")[0]);
+      } catch (e) {}
+      return m[1];
+    }
+    var c = store.get("hkd-trip");
+    return typeof c === "string" && CODE_RE.test(c) ? c : null;
+  })();
+  var MODE = HAS_CLOUD && tripCode ? "cloud" : "local";
+
+  function validExp(e) {
+    return (
+      e && typeof e.id === "string" && typeof e.key === "string" && +e.amt > 0
+    );
+  }
+  function normalize(L) {
+    L = L && typeof L === "object" ? L : {};
+    return {
+      expenses: Array.isArray(L.expenses) ? L.expenses.filter(validExp) : [],
+      done: L.done && typeof L.done === "object" ? L.done : {},
+      custom: Array.isArray(L.custom)
+        ? L.custom.filter(function (c) {
+            return c && typeof c.id === "string" && typeof c.text === "string";
+          })
+        : [],
+      rate:
+        typeof L.rate === "number" && L.rate > 0 && L.rate < 10 ? L.rate : 0.21
+    };
+  }
+  /* 本機資料；順便把舊版（hkd-ledger / hkd-todo）的記錄搬過來 */
+  function readLocal() {
+    var L = store.get("hkd-local");
+    if (L && typeof L === "object") return normalize(L);
+    L = { expenses: [], done: {}, custom: [] };
+    var old = store.get("hkd-ledger"),
+      ot = store.get("hkd-todo");
+    if (old && old.items && typeof old.items === "object") {
+      Object.keys(old.items).forEach(function (key) {
+        (Array.isArray(old.items[key]) ? old.items[key] : []).forEach(
+          function (e, j) {
+            L.expenses.push({
+              id: String(e.id || "m" + uid()),
+              key: key,
+              amt: +e.amt || 0,
+              cat: e.cat || "etc",
+              note: String(e.note || ""),
+              by: "",
+              t: j
+            });
+          }
+        );
+      });
+      if (typeof old.rate === "number") L.rate = old.rate;
+    }
+    if (ot && typeof ot === "object") {
+      L.done = ot.done || {};
+      L.custom = (Array.isArray(ot.custom) ? ot.custom : []).map(
+        function (c, j) {
+          return { id: String(c.id), text: String(c.text), t: j };
+        }
+      );
+    }
+    return normalize(L);
+  }
+  /* 共用模式先顯示上次同步的副本，連上之後再換成最新資料 */
+  var S =
+    MODE === "cloud"
+      ? normalize(store.get("hkd-mirror-" + tripCode))
+      : readLocal();
+  var BY_KEY = {},
+    seen = {};
+  function reindex() {
+    BY_KEY = {};
+    S.expenses
+      .slice()
+      .sort(function (a, b) {
+        return (a.t || 0) - (b.t || 0);
+      })
+      .forEach(function (e) {
+        (BY_KEY[e.key] = BY_KEY[e.key] || []).push(e);
+      });
+  }
+  reindex();
+
+  function yen(n) {
+    return "¥" + n.toLocaleString("ja-JP");
+  }
+  function twd(n) {
+    return "NT$" + Math.round(n * S.rate).toLocaleString("zh-TW");
+  }
+  function stopKey(di, k) {
+    var d = DAYS[di],
+      s = d.stops[k];
+    return d.date + "|" + s.t + "|" + s.n;
+  }
+  function entries(key) {
+    return BY_KEY[key] || [];
+  }
+  function sum(list) {
+    return list.reduce(function (a, e) {
+      return a + (+e.amt || 0);
+    }, 0);
+  }
+  function dayTotal(di) {
+    var t = 0;
+    DAYS[di].stops.forEach(function (s, k) {
+      t += sum(entries(stopKey(di, k)));
+    });
+    return t;
+  }
+  function toggleLabel(list) {
+    return list.length
+      ? '<span class="sr">記帳：</span>' +
+          yen(sum(list)) +
+          "・" +
+          list.length +
+          " 筆"
+      : "記帳";
+  }
+  function toggleHTML(di, k) {
+    var list = entries(stopKey(di, k));
+    return (
+      '<button type="button" class="lg-toggle' +
+      (list.length ? " has" : "") +
+      '" aria-expanded="false" aria-controls="lg' +
+      di +
+      "-" +
+      k +
+      '">' +
+      ico("i-coin") +
+      '<span class="lg-lab">' +
+      toggleLabel(list) +
+      '</span><svg class="chev" aria-hidden="true"><use href="#i-chev"/></svg></button>'
+    );
+  }
+  function listHTML(di, k) {
+    var list = entries(stopKey(di, k));
+    if (!list.length)
+      return '<li class="lg-empty">還沒有記錄，記下第一筆吧。</li>';
+    return (
+      list
+        .map(function (e) {
+          seen[e.id] = 1;
+          var c = catOf(e.cat),
+            a = +e.amt || 0;
+          return (
+            '<li class="lg-item" data-id="' +
+            esc(e.id) +
+            '"><span class="lg-cat" style="--cc:var(' +
+            c.c +
+            ')">' +
+            c.lab +
+            "</span>" +
+            '<span class="lg-n">' +
+            esc(e.note || "") +
+            (e.by ? "<small>" + esc(e.by) + "</small>" : "") +
+            "</span><b>" +
+            yen(a) +
+            "</b>" +
+            '<button type="button" class="lg-del" data-del="' +
+            esc(e.id) +
+            '" aria-label="刪除 ' +
+            c.lab +
+            " " +
+            yen(a) +
+            '">' +
+            ico("i-x") +
+            "</button></li>"
+          );
+        })
+        .join("") +
+      (list.length > 1
+        ? '<li class="lg-sub"><span>小計</span><b>' +
+          yen(sum(list)) +
+          "</b></li>"
+        : "")
+    );
+  }
+  function ledgerInner(di, k, kind) {
+    var id = "lg" + di + "-" + k,
+      def = DEFCAT[kind] || "etc";
+    return (
+      '<ul class="lg-list">' +
+      listHTML(di, k) +
+      "</ul>" +
+      '<form class="lg-form" data-k="' +
+      k +
+      '" novalidate>' +
+      '<div class="lg-amt"><label class="sr" for="' +
+      id +
+      '-amt">金額（日圓）</label><span class="yen" aria-hidden="true">¥</span>' +
+      '<input id="' +
+      id +
+      '-amt" name="amt" type="text" inputmode="numeric" autocomplete="off" placeholder="金額" maxlength="10"></div>' +
+      '<fieldset class="lg-cats"><legend class="sr">分類</legend>' +
+      CATS.map(function (c) {
+        return (
+          '<input type="radio" name="cat" id="' +
+          id +
+          "-c-" +
+          c.id +
+          '" value="' +
+          c.id +
+          '"' +
+          (c.id === def ? " checked" : "") +
+          ">" +
+          '<label for="' +
+          id +
+          "-c-" +
+          c.id +
+          '" style="--cc:var(' +
+          c.c +
+          ')">' +
+          c.lab +
+          "</label>"
+        );
+      }).join("") +
+      "</fieldset>" +
+      '<div class="lg-row"><label class="sr" for="' +
+      id +
+      '-note">備註</label>' +
+      '<input class="lg-note" id="' +
+      id +
+      '-note" name="note" type="text" placeholder="備註，可不填" maxlength="40" autocomplete="off">' +
+      '<button type="submit" class="lg-add">記一筆</button></div>' +
+      '<p class="lg-err" hidden>請輸入金額，例如 1200</p>' +
+      "</form>"
+    );
+  }
+
   function legDur(d, k) {
     var a = d.stops[k],
       b = d.stops[k + 1];
     return toMin(b.t) - (toMin(a.t) + (a.stay || 0));
   }
 
-  function stopHTML(s, i) {
+  function stopHTML(s, i, di, k) {
     var kind = s.k || "spot";
     var nodeCls = s.must ? "n-must" : "n-" + kind;
     var cardCls =
@@ -877,13 +1182,25 @@
       (s.sub ? '<p class="t-sub">' + s.sub + "</p>" : "") +
       (stay ? '<p class="t-stay">' + stay + "</p>" : "") +
       (s.tip ? '<p class="t-tip">' + s.tip + "</p>" : "") +
+      '<div class="t-foot">' +
       (kind !== "hotel"
-        ? '<div class="t-foot"><a class="mini-link" href="' +
+        ? '<a class="mini-link" href="' +
           mapUrl(s.q || s.n) +
           '" target="_blank" rel="noopener">' +
           ico("i-pin") +
-          "地圖</a></div>"
+          "地圖</a>"
         : "") +
+      toggleHTML(di, k) +
+      "</div>" +
+      '<div class="ledger" id="lg' +
+      di +
+      "-" +
+      k +
+      '" data-k="' +
+      k +
+      '" hidden>' +
+      ledgerInner(di, k, kind) +
+      "</div>" +
       "</div></li>"
     );
   }
@@ -938,6 +1255,7 @@
     var musts = d.stops.filter(function (s) {
       return s.must;
     }).length;
+    var dt = dayTotal(i);
     var html =
       '<div class="dayhead" style="--hb:var(' +
       HEADBG[i % 4] +
@@ -971,6 +1289,13 @@
           musts +
           " 處</span>"
         : "") +
+      '<span class="pill pill-cost" id="dayCost"' +
+      (dt ? "" : " hidden") +
+      ">" +
+      ico("i-coin") +
+      '今天花了 <span id="dayCostV">' +
+      yen(dt) +
+      "</span></span>" +
       "</div>" +
       "</div>" +
       '<div class="dayicon">' +
@@ -981,7 +1306,7 @@
     html += '<ol class="tl">';
     var n = 0;
     d.stops.forEach(function (s, k) {
-      html += stopHTML(s, n++);
+      html += stopHTML(s, n++, i, k);
       if (k < d.legs.length) html += legHTML(d, k, n++);
     });
     html += "</ol>";
@@ -1274,23 +1599,8 @@
       ]
     }
   ];
-  var state = store.get("hkd-todo") || {};
-  state.done = state.done || {};
-  state.custom = state.custom || [];
-  function saveTodo() {
-    store.set("hkd-todo", state);
-  }
-  function esc(s) {
-    return s.replace(/[&<>"']/g, function (c) {
-      return {
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;"
-      }[c];
-    });
-  }
+  var myName = String(store.get("hkd-name") || "").slice(0, 12);
+
   function itemHTML(id, text, sub, custom) {
     return (
       '<li><input type="checkbox" id="td-' +
@@ -1298,7 +1608,7 @@
       '" data-id="' +
       id +
       '"' +
-      (state.done[id] ? " checked" : "") +
+      (S.done[id] ? " checked" : "") +
       ">" +
       '<label for="td-' +
       id +
@@ -1307,7 +1617,9 @@
       (sub ? "<small>" + sub + "</small>" : "") +
       "</label>" +
       (custom
-        ? '<button type="button" class="del" data-del="' +
+        ? '<button type="button" class="del" id="tdx-' +
+          id +
+          '" data-del="' +
           id +
           '" aria-label="刪除「' +
           text +
@@ -1317,6 +1629,9 @@
     );
   }
   function renderTodo() {
+    var box = el("todoGroups"),
+      a = document.activeElement;
+    var keep = a && a.id && box.contains(a) ? a.id : null;
     var html = TODO.map(function (g) {
       return (
         "<div><h3>" +
@@ -1330,20 +1645,27 @@
         "</ul></div>"
       );
     }).join("");
-    if (state.custom.length) {
+    var custom = S.custom.slice().sort(function (x, y) {
+      return (x.t || 0) - (y.t || 0);
+    });
+    if (custom.length) {
       html +=
-        "<div><h3>我自己加的</h3><ul>" +
-        state.custom
+        "<div><h3>另外加的</h3><ul>" +
+        custom
           .map(function (c) {
-            return itemHTML(c.id, esc(c.text), "", true);
+            return itemHTML(esc(c.id), esc(c.text), "", true);
           })
           .join("") +
         "</ul></div>";
     }
-    document.getElementById("todoGroups").innerHTML =
+    box.innerHTML =
       '<div style="display:flex;flex-direction:column;gap:16px">' +
       html +
       "</div>";
+    if (keep) {
+      var k = document.getElementById(keep);
+      if (k) k.focus({ preventScroll: true });
+    }
     updateProgress();
   }
   function allIds() {
@@ -1353,7 +1675,7 @@
         ids.push(it[0]);
       });
     });
-    state.custom.forEach(function (c) {
+    S.custom.forEach(function (c) {
       ids.push(c.id);
     });
     return ids;
@@ -1361,7 +1683,7 @@
   function updateProgress() {
     var ids = allIds(),
       done = ids.filter(function (id) {
-        return state.done[id];
+        return S.done[id];
       }).length;
     el("tDone").textContent = done;
     el("tTotal").textContent = ids.length;
@@ -1373,22 +1695,12 @@
   el("todoGroups").addEventListener("change", function (e) {
     var t = e.target;
     if (!t.dataset.id) return;
-    if (t.checked) state.done[t.dataset.id] = 1;
-    else delete state.done[t.dataset.id];
-    saveTodo();
-    updateProgress();
+    if (!DB.setTodo(t.dataset.id, t.checked)) t.checked = !t.checked;
   });
   el("todoGroups").addEventListener("click", function (e) {
     var b = e.target.closest("[data-del]");
     if (!b) return;
-    var id = b.dataset.del;
-    state.custom = state.custom.filter(function (c) {
-      return c.id !== id;
-    });
-    delete state.done[id];
-    saveTodo();
-    renderTodo();
-    el("addInput").focus();
+    if (DB.removeTodo(b.dataset.del)) el("addInput").focus();
   });
   el("addForm").addEventListener("submit", function (e) {
     e.preventDefault();
@@ -1398,12 +1710,791 @@
       input.focus();
       return;
     }
-    state.custom.push({ id: "c" + Date.now().toString(36), text: v });
-    input.value = "";
-    saveTodo();
-    renderTodo();
+    if (DB.addTodo(v.slice(0, 60))) input.value = "";
   });
+
+  /* ---------- 提示訊息（刪除後可復原） ---------- */
+  var toast = el("toast"),
+    toastTimer = null,
+    undoData = null;
+  function showToast(msg, undo) {
+    el("toastMsg").textContent = msg;
+    el("toastUndo").hidden = !undo;
+    undoData = undo || null;
+    toast.hidden = false;
+    toast.classList.remove("show");
+    void toast.offsetWidth;
+    toast.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(hideToast, undo ? 6000 : 4500);
+  }
+  function hideToast() {
+    toast.hidden = true;
+    undoData = null;
+    clearTimeout(toastTimer);
+  }
+  el("toastUndo").addEventListener("click", function () {
+    var u = undoData;
+    if (!u) return;
+    hideToast();
+    DB.addExpense(u.e);
+  });
+
+  /* ---------- 資料寫入：本機或共用資料庫 ---------- */
+  var Cloud = {
+    fs: null,
+    db: null,
+    loading: null,
+    unsubs: [],
+    meta: {},
+    failed: false,
+    error: null
+  };
+  var rateTimer = null;
+  function commitLocal() {
+    store.set("hkd-local", S);
+    reindex();
+    emit();
+    return true;
+  }
+  function ref(segs) {
+    return Cloud.fs.doc.apply(null, [Cloud.db, "trips", tripCode].concat(segs));
+  }
+  function cloudOK() {
+    if (Cloud.db && !Cloud.error) return true;
+    showToast(
+      Cloud.error
+        ? "共用帳本出錯了，這筆沒有存到。"
+        : Cloud.failed
+          ? "連不上共用帳本，這筆沒有存到。請連上網路後再試。"
+          : "正在連線共用帳本，請等幾秒再試。"
+    );
+    return false;
+  }
+  function onCloudError(err) {
+    Cloud.error = err || { code: "unknown" };
+    console.warn("[北海道] 同步錯誤", err);
+    updateSync();
+  }
+  function cloudSet(segs, data, merge) {
+    if (!cloudOK()) return false;
+    Cloud.fs
+      .setDoc(ref(segs), data, merge ? { merge: true } : {})
+      .catch(onCloudError);
+    return true;
+  }
+  function cloudDel(segs) {
+    if (!cloudOK()) return false;
+    Cloud.fs.deleteDoc(ref(segs)).catch(onCloudError);
+    return true;
+  }
+  function expDoc(e) {
+    return {
+      key: e.key,
+      amt: e.amt,
+      cat: e.cat,
+      note: e.note || "",
+      by: e.by || "",
+      t: e.t || Date.now()
+    };
+  }
+  var DB = {
+    addExpense: function (e) {
+      if (MODE === "local") {
+        S.expenses.push(e);
+        return commitLocal();
+      }
+      return cloudSet(["expenses", e.id], expDoc(e));
+    },
+    removeExpense: function (e) {
+      if (MODE === "local") {
+        S.expenses = S.expenses.filter(function (x) {
+          return x.id !== e.id;
+        });
+        return commitLocal();
+      }
+      return cloudDel(["expenses", e.id]);
+    },
+    setTodo: function (id, done) {
+      if (MODE === "local") {
+        if (done) S.done[id] = 1;
+        else delete S.done[id];
+        return commitLocal();
+      }
+      return cloudSet(["todo", id], { done: !!done }, true);
+    },
+    addTodo: function (text) {
+      var item = { id: "c" + uid(), text: text, t: Date.now() };
+      if (MODE === "local") {
+        S.custom.push(item);
+        return commitLocal();
+      }
+      return cloudSet(["todo", item.id], {
+        text: text,
+        custom: true,
+        done: false,
+        t: item.t
+      });
+    },
+    removeTodo: function (id) {
+      if (MODE === "local") {
+        S.custom = S.custom.filter(function (c) {
+          return c.id !== id;
+        });
+        delete S.done[id];
+        return commitLocal();
+      }
+      return cloudDel(["todo", id]);
+    },
+    setRate: function (v) {
+      if (MODE === "local") {
+        S.rate = v;
+        return commitLocal();
+      }
+      S.rate = v;
+      renderSummary();
+      clearTimeout(rateTimer);
+      rateTimer = setTimeout(function () {
+        rateTimer = null;
+        cloudSet(["meta", "settings"], { rate: v });
+      }, 600);
+      return true;
+    }
+  };
+
+  /* ---------- 共用資料庫連線（Firebase Firestore） ---------- */
+  function startCloud() {
+    Cloud.error = null;
+    Cloud.meta = {};
+    updateSync();
+    if (!Cloud.loading) {
+      var base = "https://www.gstatic.com/firebasejs/" + SDK_VER + "/";
+      Cloud.loading = Promise.all([
+        import(base + "firebase-app.js"),
+        import(base + "firebase-firestore.js")
+      ]).then(function (m) {
+        var app = m[0].initializeApp(FB),
+          fs = m[1],
+          db;
+        try {
+          // 離線快取：沒訊號時也能記帳，連上網路後自動上傳
+          db = fs.initializeFirestore(app, {
+            localCache: fs.persistentLocalCache({
+              tabManager: fs.persistentMultipleTabManager()
+            })
+          });
+        } catch (err) {
+          db = fs.getFirestore(app);
+        }
+        Cloud.fs = fs;
+        Cloud.db = db;
+        Cloud.failed = false;
+      });
+    }
+    Cloud.loading.then(
+      function () {
+        if (MODE === "cloud") subscribe();
+      },
+      function (err) {
+        Cloud.failed = true;
+        Cloud.loading = null;
+        console.warn("[北海道] Firebase 載入失敗", err);
+        updateSync();
+      }
+    );
+  }
+  function stopListen() {
+    Cloud.unsubs.forEach(function (u) {
+      try {
+        u();
+      } catch (e) {}
+    });
+    Cloud.unsubs = [];
+  }
+  function subscribe() {
+    stopListen();
+    var fs = Cloud.fs,
+      db = Cloud.db,
+      code = tripCode,
+      opt = { includeMetadataChanges: true };
+    function guard(fn) {
+      return function (snap) {
+        if (MODE !== "cloud" || code !== tripCode) return;
+        fn(snap);
+        reindex();
+        store.set("hkd-mirror-" + code, S);
+        emit();
+        updateSync();
+      };
+    }
+    Cloud.unsubs = [
+      fs.onSnapshot(
+        fs.collection(db, "trips", code, "expenses"),
+        opt,
+        guard(function (snap) {
+          S.expenses = snap.docs
+            .map(function (d) {
+              var x = d.data() || {};
+              return {
+                id: d.id,
+                key: String(x.key || ""),
+                amt: +x.amt || 0,
+                cat: x.cat,
+                note: String(x.note || ""),
+                by: String(x.by || ""),
+                t: +x.t || 0
+              };
+            })
+            .filter(validExp);
+          Cloud.meta.exp = snap.metadata;
+        }),
+        onCloudError
+      ),
+      fs.onSnapshot(
+        fs.collection(db, "trips", code, "todo"),
+        opt,
+        guard(function (snap) {
+          var done = {},
+            custom = [];
+          snap.docs.forEach(function (d) {
+            var x = d.data() || {};
+            if (x.done) done[d.id] = 1;
+            if (x.custom && typeof x.text === "string")
+              custom.push({ id: d.id, text: x.text, t: +x.t || 0 });
+          });
+          S.done = done;
+          S.custom = custom;
+          Cloud.meta.todo = snap.metadata;
+        }),
+        onCloudError
+      ),
+      fs.onSnapshot(
+        fs.doc(db, "trips", code, "meta", "settings"),
+        opt,
+        guard(function (snap) {
+          var x = snap.exists() ? snap.data() : null;
+          if (
+            !rateTimer &&
+            x &&
+            typeof x.rate === "number" &&
+            x.rate > 0 &&
+            x.rate < 10
+          )
+            S.rate = x.rate;
+          Cloud.meta.cfg = snap.metadata;
+        }),
+        onCloudError
+      )
+    ];
+  }
+  window.addEventListener("online", function () {
+    if (MODE === "cloud" && !Cloud.db) startCloud();
+    updateSync();
+  });
+  window.addEventListener("offline", updateSync);
+
+  /* ---------- 同步狀態 ---------- */
+  var SYNC_TXT = {
+    local: "只存在這台裝置",
+    connecting: "正在連線…",
+    synced: "已同步",
+    saving: "同步中…",
+    offline: "離線中",
+    "offline-pending": "離線中・有資料等著上傳",
+    nosdk: "連不上同步服務",
+    error: "同步出錯"
+  };
+  function syncState() {
+    if (MODE !== "cloud") return "local";
+    if (Cloud.error) return "error";
+    if (!Cloud.db) return Cloud.failed ? "nosdk" : "connecting";
+    var m = Cloud.meta;
+    if (!m.exp || !m.todo || !m.cfg)
+      return navigator.onLine === false ? "offline" : "connecting";
+    var pending =
+      m.exp.hasPendingWrites ||
+      m.todo.hasPendingWrites ||
+      m.cfg.hasPendingWrites;
+    var cache = m.exp.fromCache || m.todo.fromCache || m.cfg.fromCache;
+    if (navigator.onLine === false)
+      return pending ? "offline-pending" : "offline";
+    if (cache) return pending ? "saving" : "connecting";
+    return pending ? "saving" : "synced";
+  }
+  function syncDetail(st) {
+    if (st === "error") {
+      var c = Cloud.error && Cloud.error.code;
+      return c === "permission-denied"
+        ? "共用資料庫拒絕存取。請到 Firebase 主控台確認 Firestore 規則已照 README 貼上並發布。"
+        : "同步時發生錯誤（" +
+            String(c || (Cloud.error && Cloud.error.message) || "未知") +
+            "），重新整理頁面試試看。";
+    }
+    if (st === "nosdk")
+      return "可能沒有網路。先顯示上次同步的資料，暫時不能新增，連上網路後會自動重試。";
+    if (st === "offline-pending")
+      return "剛記的資料先存在這台裝置，連上網路後會自動上傳。";
+    if (st === "offline")
+      return "目前顯示上次同步的資料。離線時照樣可以記帳，連上網路後會自動同步。";
+    return "";
+  }
+  function updateSync() {
+    var st = syncState();
+    Array.prototype.forEach.call(
+      document.querySelectorAll("[data-sync]"),
+      function (n) {
+        n.dataset.state = st;
+        n.lastElementChild.textContent = SYNC_TXT[st];
+      }
+    );
+    var d = syncDetail(st),
+      box = el("shDetail");
+    box.hidden = !d;
+    box.textContent = d;
+  }
+
+  /* ---------- 景點記帳互動 ---------- */
+  function refreshStop(k) {
+    var box = document.getElementById("lg" + current + "-" + k);
+    if (!box) return;
+    var list = entries(stopKey(current, k));
+    var fresh = list
+      .filter(function (e) {
+        return !seen[e.id];
+      })
+      .map(function (e) {
+        return e.id;
+      });
+    box.querySelector(".lg-list").innerHTML = listHTML(current, k);
+    if (fresh.length && !reduced()) {
+      Array.prototype.forEach.call(
+        box.querySelectorAll(".lg-item"),
+        function (li) {
+          if (fresh.indexOf(li.dataset.id) >= 0) li.classList.add("new");
+        }
+      );
+    }
+    var btn = panel.querySelector(
+      '.lg-toggle[aria-controls="lg' + current + "-" + k + '"]'
+    );
+    if (btn) {
+      btn.querySelector(".lg-lab").innerHTML = toggleLabel(list);
+      btn.classList.toggle("has", list.length > 0);
+    }
+  }
+  function refreshDay() {
+    DAYS[current].stops.forEach(function (s, k) {
+      refreshStop(k);
+    });
+    var dt = dayTotal(current),
+      pill = el("dayCost");
+    if (pill) {
+      pill.hidden = !dt;
+      el("dayCostV").textContent = yen(dt);
+    }
+  }
+  function emit() {
+    refreshDay();
+    renderSummary();
+    renderTodo();
+    if (document.activeElement !== rateEl) rateEl.value = String(S.rate);
+  }
+  panel.addEventListener("click", function (e) {
+    var t = e.target.closest(".lg-toggle");
+    if (t) {
+      var box = document.getElementById(t.getAttribute("aria-controls"));
+      var open = box.hidden;
+      box.hidden = !open;
+      t.setAttribute("aria-expanded", open ? "true" : "false");
+      if (open && !reduced()) {
+        box.classList.remove("pop");
+        void box.offsetWidth;
+        box.classList.add("pop");
+      }
+      return;
+    }
+    var d = e.target.closest(".lg-del");
+    if (d) removeEntry(+d.closest(".ledger").dataset.k, d.dataset.del);
+  });
+  panel.addEventListener("submit", function (e) {
+    var f = e.target.closest(".lg-form");
+    if (!f) return;
+    e.preventDefault();
+    var amtEl = f.elements.amt,
+      noteEl = f.elements.note,
+      err = f.querySelector(".lg-err");
+    var raw = amtEl.value
+      .replace(/[０-９]/g, function (c) {
+        return String.fromCharCode(c.charCodeAt(0) - 0xfee0);
+      })
+      .replace(/[,，\s¥￥円]/g, "");
+    var amt = /^\d{1,8}$/.test(raw) ? parseInt(raw, 10) : 0;
+    if (!amt) {
+      err.hidden = false;
+      amtEl.focus();
+      return;
+    }
+    err.hidden = true;
+    var entry = {
+      id: "e" + uid(),
+      key: stopKey(current, +f.dataset.k),
+      amt: amt,
+      cat: f.elements.cat.value || "etc",
+      note: noteEl.value.trim().slice(0, 40),
+      by: MODE === "cloud" ? myName : "",
+      t: Date.now()
+    };
+    if (DB.addExpense(entry)) {
+      amtEl.value = "";
+      noteEl.value = "";
+    }
+  });
+  panel.addEventListener("input", function (e) {
+    if (e.target.name === "amt" && e.target.form) {
+      e.target.form.querySelector(".lg-err").hidden = true;
+    }
+  });
+  function removeEntry(k, id) {
+    var hit = null;
+    entries(stopKey(current, k)).forEach(function (x) {
+      if (x.id === id) hit = x;
+    });
+    if (!hit || !DB.removeExpense(hit)) return;
+    var tg = panel.querySelector(
+      '.lg-toggle[aria-controls="lg' + current + "-" + k + '"]'
+    );
+    if (tg) tg.focus({ preventScroll: true });
+    showToast("已刪除 " + catOf(hit.cat).lab + " " + yen(+hit.amt || 0), {
+      e: hit
+    });
+  }
+
+  /* ---------- 旅費總覽 ---------- */
+  function renderSummary() {
+    var total = 0,
+      n = 0,
+      byCat = {},
+      byDay = [];
+    DAYS.forEach(function (d, di) {
+      var t = 0;
+      d.stops.forEach(function (s, k) {
+        entries(stopKey(di, k)).forEach(function (e) {
+          var a = +e.amt || 0,
+            c = catOf(e.cat).id;
+          t += a;
+          n++;
+          byCat[c] = (byCat[c] || 0) + a;
+        });
+      });
+      byDay.push(t);
+      total += t;
+    });
+    el("mTotal").textContent = yen(total);
+    el("mCount").textContent = n ? "・共 " + n + " 筆" : "";
+    el("mTwd").textContent = twd(total);
+    el("mEmpty").hidden = n > 0;
+    el("mBody").hidden = n === 0;
+    if (!n) return;
+    var cats = CATS.filter(function (c) {
+      return byCat[c.id] > 0;
+    }).sort(function (a, b) {
+      return byCat[b.id] - byCat[a.id];
+    });
+    el("mStack").innerHTML = cats
+      .map(function (c) {
+        return (
+          '<i style="--cc:var(' +
+          c.c +
+          ");width:" +
+          ((byCat[c.id] / total) * 100).toFixed(2) +
+          '%"></i>'
+        );
+      })
+      .join("");
+    el("mCats").innerHTML = cats
+      .map(function (c) {
+        var pct = (byCat[c.id] / total) * 100;
+        return (
+          '<li><span class="lg-cat" style="--cc:var(' +
+          c.c +
+          ')">' +
+          c.lab +
+          "</span><b>" +
+          yen(byCat[c.id]) +
+          "</b><small>" +
+          (pct < 1 ? "&lt;1" : Math.round(pct)) +
+          "%</small></li>"
+        );
+      })
+      .join("");
+    var max = Math.max.apply(null, byDay);
+    el("mDays").innerHTML = DAYS.map(function (d, di) {
+      var v = byDay[di],
+        w = max ? (v / max) * 100 : 0;
+      return (
+        '<li><button type="button" data-day="' +
+        di +
+        '">' +
+        '<span class="lab">' +
+        d.date +
+        "<small>（" +
+        d.wd +
+        "）</small></span>" +
+        '<span class="track" aria-hidden="true"><i' +
+        (v ? "" : ' class="zero"') +
+        ' style="width:' +
+        w.toFixed(2) +
+        '%"></i></span>' +
+        '<span class="amt' +
+        (v ? "" : " none") +
+        '">' +
+        yen(v) +
+        '</span><span class="sr">，看第 ' +
+        (di + 1) +
+        " 天行程</span></button></li>"
+      );
+    }).join("");
+  }
+  el("mDays").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-day]");
+    if (!b) return;
+    selectDay(+b.dataset.day, { animate: true });
+    el("days").scrollIntoView({
+      behavior: reduced() ? "auto" : "smooth"
+    });
+  });
+
+  var rateEl = el("rate");
+  rateEl.addEventListener("input", function () {
+    var v = parseFloat(rateEl.value);
+    if (v > 0 && v < 10) DB.setRate(v);
+  });
+  rateEl.addEventListener("blur", function () {
+    rateEl.value = String(S.rate);
+  });
+
+  function ledgerText() {
+    var lines = ["北海道旅費記帳（2027/04/22 – 05/01）"],
+      total = 0;
+    DAYS.forEach(function (d, di) {
+      var rows = [],
+        t = 0;
+      d.stops.forEach(function (s, k) {
+        entries(stopKey(di, k)).forEach(function (e) {
+          var a = +e.amt || 0;
+          t += a;
+          rows.push(
+            "・" +
+              s.n +
+              "｜" +
+              catOf(e.cat).lab +
+              " " +
+              yen(a) +
+              (e.note ? "（" + e.note + "）" : "") +
+              (e.by ? "・" + e.by : "")
+          );
+        });
+      });
+      if (rows.length) {
+        lines.push(
+          "",
+          "第 " + (di + 1) + " 天 " + d.date + "（" + d.wd + "）小計 " + yen(t)
+        );
+        lines = lines.concat(rows);
+      }
+      total += t;
+    });
+    lines.push(
+      "",
+      "總計 " + yen(total) + "，約 " + twd(total) + "（匯率 " + S.rate + "）"
+    );
+    return lines.join("\n");
+  }
+  function copyText(text, ta, msg, okMsg, failMsg) {
+    function fallback() {
+      ta.value = text;
+      ta.hidden = false;
+      ta.focus();
+      ta.select();
+      msg.textContent = failMsg;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        ta.hidden = true;
+        msg.textContent = okMsg;
+      }, fallback);
+    } else fallback();
+  }
+  el("mCopy").addEventListener("click", function () {
+    copyText(
+      ledgerText(),
+      el("mCopyText"),
+      el("mCopyMsg"),
+      "已複製，可以貼到記事本或 LINE 備份。",
+      "已經把明細列在下面，長按全選後複製。"
+    );
+  });
+
+  /* ---------- 旅伴共用：建立、加入、邀請、離開 ---------- */
+  function inviteLink() {
+    return location.href.split("#")[0] + "#trip=" + tripCode;
+  }
+  function renderShare() {
+    el("shNoCfg").hidden = HAS_CLOUD;
+    el("shJoin").hidden = !(HAS_CLOUD && MODE === "local");
+    el("shOn").hidden = MODE !== "cloud";
+    el("todoSync").hidden = MODE !== "cloud";
+    el("shLeaveAsk").hidden = true;
+    el("shLeave").hidden = false;
+    if (MODE !== "cloud") {
+      el("shLink").hidden = true;
+      el("shInviteMsg").textContent = "";
+    }
+    checkMigrate();
+  }
+  function checkMigrate() {
+    var box = el("shMigrate");
+    if (MODE !== "cloud") {
+      box.hidden = true;
+      return;
+    }
+    var L = readLocal(),
+      n = L.expenses.length,
+      t = Object.keys(L.done).length + L.custom.length;
+    if (!(n || t) || store.get("hkd-mig-skip-" + tripCode)) {
+      box.hidden = true;
+      return;
+    }
+    el("shMigN").textContent = [n ? n + " 筆記帳" : "", t ? t + " 項清單" : ""]
+      .filter(Boolean)
+      .join("、");
+    box.hidden = false;
+  }
+  function connect(code, created) {
+    tripCode = code;
+    MODE = "cloud";
+    store.set("hkd-trip", code);
+    S = normalize(store.get("hkd-mirror-" + code));
+    reindex();
+    emit();
+    renderShare();
+    startCloud();
+    el("shInviteMsg").textContent = created
+      ? "共用帳本建好了，按上面的按鈕把邀請連結傳給旅伴。"
+      : "已加入共用帳本。";
+    el("shInvite").focus({ preventScroll: true });
+  }
+  el("shCreate").addEventListener("click", function () {
+    connect(newCode(), true);
+  });
+  el("shJoinForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var v = el("shCode").value.trim(),
+      m = /trip=([a-z0-9]{24,64})/.exec(v) || /^([a-z0-9]{24,64})$/.exec(v);
+    el("shJoinErr").hidden = !!m;
+    if (!m) {
+      el("shCode").focus();
+      return;
+    }
+    el("shCode").value = "";
+    connect(m[1], false);
+  });
+  el("shCode").addEventListener("input", function () {
+    el("shJoinErr").hidden = true;
+  });
+  el("shInvite").addEventListener("click", function () {
+    copyText(
+      inviteLink(),
+      el("shLink"),
+      el("shInviteMsg"),
+      "已複製邀請連結，傳給旅伴打開就能加入。",
+      "長按下面的連結全選後複製。"
+    );
+  });
+  el("myName").addEventListener("input", function () {
+    myName = this.value.trim().slice(0, 12);
+    store.set("hkd-name", myName);
+  });
+  el("shMigYes").addEventListener("click", function () {
+    if (!cloudOK()) return;
+    var L = readLocal(),
+      b = Cloud.fs.writeBatch(Cloud.db),
+      customIds = {};
+    L.expenses.slice(0, 400).forEach(function (e) {
+      b.set(
+        ref(["expenses", e.id]),
+        expDoc({
+          key: e.key,
+          amt: e.amt,
+          cat: catOf(e.cat).id,
+          note: e.note,
+          by: e.by || myName,
+          t: e.t || Date.now()
+        })
+      );
+    });
+    L.custom.forEach(function (c) {
+      customIds[c.id] = 1;
+      b.set(ref(["todo", c.id]), {
+        text: c.text.slice(0, 60),
+        custom: true,
+        done: !!L.done[c.id],
+        t: c.t || Date.now()
+      });
+    });
+    Object.keys(L.done).forEach(function (id) {
+      if (!customIds[id])
+        b.set(ref(["todo", id]), { done: true }, { merge: true });
+    });
+    b.commit().catch(onCloudError);
+    store.set("hkd-local", {
+      expenses: [],
+      done: {},
+      custom: [],
+      rate: L.rate
+    });
+    el("shMigrate").hidden = true;
+    showToast("已把這台裝置的資料加進共用帳本。");
+  });
+  el("shMigNo").addEventListener("click", function () {
+    store.set("hkd-mig-skip-" + tripCode, 1);
+    el("shMigrate").hidden = true;
+  });
+  el("shLeave").addEventListener("click", function () {
+    el("shLeave").hidden = true;
+    el("shLeaveAsk").hidden = false;
+    el("shLeaveNo").focus();
+  });
+  el("shLeaveNo").addEventListener("click", function () {
+    el("shLeaveAsk").hidden = true;
+    el("shLeave").hidden = false;
+    el("shLeave").focus();
+  });
+  el("shLeaveYes").addEventListener("click", function () {
+    stopListen();
+    store.del("hkd-trip");
+    tripCode = null;
+    MODE = "local";
+    Cloud.meta = {};
+    Cloud.error = null;
+    S = readLocal();
+    reindex();
+    emit();
+    renderShare();
+    updateSync();
+    showToast("已離開共用帳本，現在只存在這台裝置。");
+    el("shCreate").focus({ preventScroll: true });
+  });
+
+  /* ---------- 啟動 ---------- */
+  el("myName").value = myName;
+  rateEl.value = String(S.rate);
+  el("mWarn").hidden = canSave;
+  renderShare();
   renderTodo();
+  renderSummary();
+  updateSync();
+  if (MODE === "cloud") startCloud();
 
   /* ---------- 選單跟著捲動 ---------- */
   var links = Array.prototype.slice.call(document.querySelectorAll(".nav a"));
