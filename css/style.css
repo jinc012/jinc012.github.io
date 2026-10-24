@@ -189,6 +189,16 @@ body::before {
 section {
   scroll-margin-top: calc(var(--top) + 12px);
 }
+/* 分頁切換：一次只顯示一個區塊 */
+.page-in {
+  animation: page-in 0.35s cubic-bezier(0.3, 0.7, 0.35, 1.1);
+}
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
 .sec-head {
   display: flex;
   align-items: center;

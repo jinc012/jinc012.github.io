@@ -1616,10 +1616,8 @@
           DAYS[td].title +
           '<br><button type="button" id="goToday">看今天的行程</button>';
         el("goToday").addEventListener("click", function () {
+          openPage("days");
           selectDay(td, { animate: true, force: true });
-          el("days").scrollIntoView({
-            behavior: reduced() ? "auto" : "smooth"
-          });
         });
       }
     } else {
@@ -2862,10 +2860,8 @@
   el("mDays").addEventListener("click", function (e) {
     var b = e.target.closest("[data-day]");
     if (!b) return;
+    openPage("days");
     selectDay(+b.dataset.day, { animate: true });
-    el("days").scrollIntoView({
-      behavior: reduced() ? "auto" : "smooth"
-    });
   });
 
   /* ---------- 分帳 ---------- */
@@ -3316,31 +3312,50 @@
   updateSync();
   if (MODE === "cloud") startCloud();
 
-  /* ---------- 選單跟著捲動 ---------- */
+  /* ---------- 分頁：一次只顯示一個區塊，網址 #home、#flights… 對應頁面 ---------- */
   var links = Array.prototype.slice.call(document.querySelectorAll(".nav a"));
-  var sections = links.map(function (a) {
+  var pages = links.map(function (a) {
     return document.querySelector(a.getAttribute("href"));
   });
-  function setActive(id) {
-    links.forEach(function (a) {
-      var on = a.getAttribute("href") === "#" + id;
+  var page = null;
+  // #split 這類頁面裡的錨點：打開它所在的頁面再捲過去
+  function showPage(hash, animate) {
+    var id = String(hash || "").replace(/^#/, ""),
+      target = id ? document.getElementById(id) : null,
+      sec = target && target.closest("main > section");
+    if (!sec || pages.indexOf(sec) < 0) {
+      sec = pages[0];
+      target = null;
+    }
+    var changed = sec !== page;
+    page = sec;
+    pages.forEach(function (s) {
+      s.hidden = s !== sec;
+    });
+    links.forEach(function (a, i) {
+      var on = pages[i] === sec;
       a.classList.toggle("on", on);
-      if (on) a.setAttribute("aria-current", "true");
+      if (on) a.setAttribute("aria-current", "page");
       else a.removeAttribute("aria-current");
+      if (on && a.scrollIntoView)
+        a.scrollIntoView({ block: "nearest", inline: "nearest" });
     });
+    document.title =
+      sec === pages[0]
+        ? "北海道"
+        : "北海道｜" + links[pages.indexOf(sec)].textContent;
+    if (changed && animate && !reduced()) {
+      sec.classList.remove("page-in");
+      void sec.offsetWidth;
+      sec.classList.add("page-in");
+    }
+    if (target && target !== sec) target.scrollIntoView();
+    else if (changed) window.scrollTo(0, 0);
+    onScroll();
   }
-  if ("IntersectionObserver" in window) {
-    var io = new IntersectionObserver(
-      function (entries) {
-        entries.forEach(function (en) {
-          if (en.isIntersecting) setActive(en.target.id);
-        });
-      },
-      { rootMargin: "-40% 0px -55% 0px" }
-    );
-    sections.forEach(function (s) {
-      io.observe(s);
-    });
+  function openPage(id) {
+    if (location.hash === "#" + id) showPage(location.hash, true);
+    else location.hash = id;
   }
   function onScroll() {
     var navH = document.querySelector(".topbar").getBoundingClientRect().height;
@@ -3349,12 +3364,10 @@
       daybar.getBoundingClientRect().top <= navH + 0.5 &&
         el("days").getBoundingClientRect().bottom > navH + 80
     );
-    if (
-      window.innerHeight + window.scrollY >=
-      document.documentElement.scrollHeight - 4
-    )
-      setActive("todo");
   }
   window.addEventListener("scroll", onScroll, { passive: true });
-  onScroll();
+  showPage(location.hash);
+  window.addEventListener("hashchange", function () {
+    showPage(location.hash, true);
+  });
 })();
