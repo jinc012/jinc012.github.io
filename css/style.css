@@ -1022,6 +1022,199 @@ section {
   border-radius: 12px;
   background: var(--coral-pale);
 }
+
+/* 收據掃描、誰付的、明細 */
+.lg-row .lg-amt {
+  flex: 1;
+  min-width: 0;
+}
+.lg-scan {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: var(--line) solid var(--ink);
+  border-radius: 999px;
+  background: var(--mizu);
+  padding: 5px 12px;
+  font-size: 14.5px;
+  cursor: pointer;
+}
+.lg-scan svg {
+  width: 18px;
+  height: 18px;
+}
+.lg-scan:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+.lg-scanmsg {
+  font-size: 13.5px;
+  padding: 4px 12px;
+  border: 2px dashed var(--ink);
+  border-radius: 14px;
+  background: var(--mizu-pale);
+}
+.lg-scanmsg.bad {
+  background: var(--coral-pale);
+}
+.lg-pay,
+.lg-rest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  font-size: 14px;
+}
+.lg-sel {
+  min-width: 0;
+  max-width: 100%;
+  font: inherit;
+  font-size: 16px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 2.5px solid var(--ink);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.lg-rest-amt {
+  font-variant-numeric: tabular-nums;
+}
+.lg-rest-amt.bad {
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--coral-pale);
+}
+.lg-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.lg-items:empty {
+  display: none;
+}
+.lg-it {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 8px;
+  border: 2px dashed var(--ink);
+  border-radius: 16px;
+}
+.lg-it-n {
+  grid-column: 1 / 3;
+  min-width: 0;
+  font: inherit;
+  font-size: 16px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 2.5px solid var(--ink);
+  border-radius: 999px;
+  padding: 3px 12px;
+}
+.lg-it-amt {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 0 4px 0 10px;
+  border: 2.5px solid var(--ink);
+  border-radius: 999px;
+  background: var(--paper);
+}
+.lg-it-amt:focus-within {
+  outline: 3px dashed var(--ink);
+  outline-offset: 2px;
+}
+.lg-it-amt input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  padding: 3px 2px;
+  font-variant-numeric: tabular-nums;
+}
+.lg-it-n::placeholder,
+.lg-it-amt input::placeholder {
+  color: var(--ink-soft);
+}
+.lg-it .lg-sel {
+  grid-column: 2 / 4;
+  width: 100%;
+}
+.lg-it-del {
+  grid-column: 3;
+  grid-row: 1;
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+  background: var(--paper);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.lg-it-del svg {
+  width: 14px;
+  height: 14px;
+}
+.lg-additem {
+  align-self: flex-start;
+  border: 2.5px dashed var(--ink);
+  border-radius: 999px;
+  background: var(--paper);
+  padding: 3px 12px;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.lg-hint {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.lg-item .lg-n {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+}
+.lg-item .lg-n small {
+  margin-left: 0;
+}
+.lg-its {
+  grid-column: 1 / -1;
+  list-style: none;
+  margin: 0 36px 2px 0;
+  padding: 2px 0 0 12px;
+  border-left: 2.5px dotted var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 13.5px;
+}
+.lg-its li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.lg-its span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.lg-its small {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+.lg-its b {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
 .must {
   flex: none;
   display: inline-flex;
@@ -1510,6 +1703,143 @@ section {
   gap: 6px 8px;
   font-size: 13.5px;
   color: var(--ink-soft);
+}
+
+/* 分帳 */
+.split {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--yamabuki-pale);
+}
+.split h3 {
+  font-size: 19px;
+}
+.split h4 {
+  font-size: 15px;
+  color: var(--ink-soft);
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+.split .hint {
+  font-size: 13.5px;
+  color: var(--ink-soft);
+}
+.sp-lab {
+  font-size: 13.5px;
+  color: var(--ink-soft);
+}
+.sp-mem {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sp-mem:empty {
+  display: none;
+}
+.sp-mem li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 3px 2px 12px;
+  border: 2.5px solid var(--ink);
+  border-radius: 999px;
+  background: var(--paper);
+  font-size: 15px;
+}
+.sp-mem button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+  background: var(--paper);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.sp-mem svg {
+  width: 12px;
+  height: 12px;
+}
+.sp-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.sp-bal,
+.sp-moves {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sp-bal li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 12px;
+  padding: 6px 14px;
+  border: 2.5px solid var(--ink);
+  border-radius: 18px;
+  background: var(--paper);
+  font-variant-numeric: tabular-nums;
+}
+.sp-bal b {
+  font-weight: 400;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+.sp-bal .net {
+  text-align: right;
+}
+.sp-bal .net.pos {
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--wakatake);
+}
+.sp-bal .net.neg {
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--coral-pale);
+}
+.sp-bal small {
+  grid-column: 1 / -1;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+.sp-moves li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 8px 16px;
+  border: var(--line) solid var(--ink);
+  border-radius: 22px;
+  background: var(--paper);
+  font-size: 16px;
+}
+.sp-moves b {
+  font-weight: 400;
+}
+.sp-moves .amt {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.sp-moves .amt small {
+  margin-left: 6px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+.sp-moves li.ok {
+  justify-content: center;
+  border-style: dashed;
+  font-size: 14.5px;
 }
 
 /* 刪除後的復原提示 */

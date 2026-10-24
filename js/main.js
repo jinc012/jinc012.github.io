@@ -866,10 +866,13 @@
 
   /* 共用資料庫設定：config.js 會放 window.TRIP_CONFIG */
   var SDK_VER = "12.19.0";
+  var SDK_BASE = "https://www.gstatic.com/firebasejs/" + SDK_VER + "/";
   var CFG = window.TRIP_CONFIG || {};
   var FB = CFG.firebase || {};
   var HAS_CLOUD = !!(FB.apiKey && FB.projectId);
+  var AI_MODEL = (CFG.ai && CFG.ai.model) || "gemini-3.5-flash";
   var CODE_RE = /^[a-z0-9]{24,64}$/;
+  var myName = String(store.get("hkd-name") || "").slice(0, 12);
   var canSave = (function () {
     try {
       localStorage.setItem("hkd-t", "1");
@@ -925,10 +928,56 @@
       e && typeof e.id === "string" && typeof e.key === "string" && +e.amt > 0
     );
   }
+  /* 分帳欄位：pay 誰付的；items 明細（who 空白＝付款人、* ＝大家平分）；
+     rest 明細以外的金額算誰的，規則和 who 一樣 */
+  function cleanName(s) {
+    return String(s || "")
+      .trim()
+      .slice(0, 12);
+  }
+  function cleanMembers(a) {
+    var out = [];
+    (Array.isArray(a) ? a : []).forEach(function (n) {
+      n = cleanName(n);
+      if (n && n !== "*" && out.indexOf(n) < 0 && out.length < 20) out.push(n);
+    });
+    return out;
+  }
+  function cleanItems(a) {
+    return (Array.isArray(a) ? a : [])
+      .filter(function (it) {
+        return it && Math.round(+it.amt) > 0;
+      })
+      .slice(0, 40)
+      .map(function (it) {
+        return {
+          n: String(it.n || "").slice(0, 30),
+          amt: Math.round(+it.amt),
+          who: String(it.who || "").slice(0, 20)
+        };
+      });
+  }
+  function cleanExp(e) {
+    return {
+      id: e.id,
+      key: e.key,
+      amt: +e.amt,
+      cat: e.cat,
+      note: String(e.note || ""),
+      by: String(e.by || ""),
+      t: +e.t || 0,
+      pay: String(e.pay || "").slice(0, 20),
+      rest: String(e.rest || "").slice(0, 20),
+      items: cleanItems(e.items)
+    };
+  }
   function normalize(L) {
     L = L && typeof L === "object" ? L : {};
     return {
-      expenses: Array.isArray(L.expenses) ? L.expenses.filter(validExp) : [],
+      expenses: Array.isArray(L.expenses)
+        ? L.expenses.filter(validExp).map(cleanExp)
+        : [],
+      members: cleanMembers(L.members),
       done: L.done && typeof L.done === "object" ? L.done : {},
       custom: Array.isArray(L.custom)
         ? L.custom.filter(function (c) {
@@ -1013,6 +1062,72 @@
       return a + (+e.amt || 0);
     }, 0);
   }
+  function payerOf(e) {
+    return e.pay || e.by || "";
+  }
+  function whoLab(who, e) {
+    return who === "*" ? "大家平分" : who || payerOf(e) || "付款人";
+  }
+  function defPayer() {
+    var me = cleanName(myName);
+    return S.members.indexOf(me) >= 0 ? me : S.members[0] || "";
+  }
+  function peopleOpts(kind, val) {
+    var list = S.members.slice(),
+      opts =
+        kind === "who"
+          ? [
+              ["", "付款人自己"],
+              ["*", "大家平分"]
+            ]
+          : [];
+    if (val && val !== "*" && list.indexOf(val) < 0) list.push(val);
+    list.forEach(function (n) {
+      opts.push([n, n]);
+    });
+    return opts
+      .map(function (o) {
+        return (
+          '<option value="' +
+          esc(o[0]) +
+          '"' +
+          (o[0] === val ? " selected" : "") +
+          ">" +
+          esc(o[1]) +
+          "</option>"
+        );
+      })
+      .join("");
+  }
+  /* 旅伴名單變了，就更新記帳表單裡「誰付的／誰買的」選單，保留已經選好的值 */
+  function fillPeople(root) {
+    var sig = S.members.join("\n"),
+      has = S.members.length > 0;
+    Array.prototype.forEach.call(
+      root.querySelectorAll("select[data-people]"),
+      function (s) {
+        if (s.dataset.sig === sig) return;
+        var v =
+          s.dataset.sig === undefined && s.dataset.people === "pay"
+            ? defPayer()
+            : s.value;
+        s.innerHTML = peopleOpts(s.dataset.people, v);
+        s.dataset.sig = sig;
+      }
+    );
+    Array.prototype.forEach.call(
+      root.querySelectorAll("[data-split]"),
+      function (n) {
+        n.hidden = !has;
+      }
+    );
+    Array.prototype.forEach.call(
+      root.querySelectorAll("[data-nosplit]"),
+      function (n) {
+        n.hidden = has;
+      }
+    );
+  }
   function dayTotal(di) {
     var t = 0;
     DAYS[di].stops.forEach(function (s, k) {
@@ -1054,7 +1169,9 @@
         .map(function (e) {
           seen[e.id] = 1;
           var c = catOf(e.cat),
-            a = +e.amt || 0;
+            a = +e.amt || 0,
+            payer = payerOf(e),
+            rest = a - sum(e.items);
           return (
             '<li class="lg-item" data-id="' +
             esc(e.id) +
@@ -1065,7 +1182,14 @@
             "</span>" +
             '<span class="lg-n">' +
             esc(e.note || "") +
-            (e.by ? "<small>" + esc(e.by) + "</small>" : "") +
+            (payer
+              ? "<small>" + esc(payer) + (e.pay ? " 付" : "") + "</small>"
+              : "") +
+            (!e.items.length && e.rest
+              ? "<small>" +
+                (e.rest === "*" ? "大家平分" : "算 " + esc(e.rest) + " 的") +
+                "</small>"
+              : "") +
             "</span><b>" +
             yen(a) +
             "</b>" +
@@ -1077,7 +1201,32 @@
             yen(a) +
             '">' +
             ico("i-x") +
-            "</button></li>"
+            "</button>" +
+            (e.items.length
+              ? '<ul class="lg-its">' +
+                e.items
+                  .map(function (it) {
+                    return (
+                      "<li><span>" +
+                      esc(it.n || "品項") +
+                      "</span><small>" +
+                      esc(whoLab(it.who, e)) +
+                      "</small><b>" +
+                      yen(it.amt) +
+                      "</b></li>"
+                    );
+                  })
+                  .join("") +
+                (rest > 0
+                  ? "<li><span>其餘</span><small>" +
+                    esc(whoLab(e.rest, e)) +
+                    "</small><b>" +
+                    yen(rest) +
+                    "</b></li>"
+                  : "") +
+                "</ul>"
+              : "") +
+            "</li>"
           );
         })
         .join("") +
@@ -1098,12 +1247,20 @@
       '<form class="lg-form" data-k="' +
       k +
       '" novalidate>' +
+      '<div class="lg-row">' +
       '<div class="lg-amt"><label class="sr" for="' +
       id +
       '-amt">金額（日圓）</label><span class="yen" aria-hidden="true">¥</span>' +
       '<input id="' +
       id +
       '-amt" name="amt" type="text" inputmode="numeric" autocomplete="off" placeholder="金額" maxlength="10"></div>' +
+      (HAS_CLOUD
+        ? '<button type="button" class="lg-scan">' +
+          ico("i-camera") +
+          '掃收據</button><input type="file" class="lg-file" accept="image/*" hidden>'
+        : "") +
+      "</div>" +
+      '<p class="lg-scanmsg" role="status" hidden></p>' +
       '<fieldset class="lg-cats"><legend class="sr">分類</legend>' +
       CATS.map(function (c) {
         return (
@@ -1128,6 +1285,19 @@
         );
       }).join("") +
       "</fieldset>" +
+      '<div class="lg-pay" data-split><label for="' +
+      id +
+      '-pay">誰付的</label><select class="lg-sel" id="' +
+      id +
+      '-pay" name="pay" data-people="pay"></select></div>' +
+      '<div class="lg-items"></div>' +
+      '<button type="button" class="lg-additem">＋ 加明細</button>' +
+      '<div class="lg-rest" data-split><label class="lg-rest-lab" for="' +
+      id +
+      '-rest">這筆算</label><select class="lg-sel" id="' +
+      id +
+      '-rest" name="rest" data-people="who"></select><span class="lg-rest-amt"></span></div>' +
+      '<p class="lg-hint" data-nosplit hidden>想記誰付錢、算分帳，先到<a href="#split">分帳</a>加入旅伴名單。</p>' +
       '<div class="lg-row"><label class="sr" for="' +
       id +
       '-note">備註</label>' +
@@ -1311,6 +1481,7 @@
     });
     html += "</ol>";
     panel.innerHTML = html;
+    fillPeople(panel);
     panel.setAttribute("aria-labelledby", "tab-" + i);
     if (animate && !reduced()) {
       panel.classList.remove("bounce");
@@ -1599,8 +1770,6 @@
       ]
     }
   ];
-  var myName = String(store.get("hkd-name") || "").slice(0, 12);
-
   function itemHTML(id, text, sub, custom) {
     return (
       '<li><input type="checkbox" id="td-' +
@@ -1795,7 +1964,10 @@
       cat: e.cat,
       note: e.note || "",
       by: e.by || "",
-      t: e.t || Date.now()
+      t: e.t || Date.now(),
+      pay: e.pay || "",
+      rest: e.rest || "",
+      items: cleanItems(e.items)
     };
   }
   var DB = {
@@ -1856,24 +2028,47 @@
       clearTimeout(rateTimer);
       rateTimer = setTimeout(function () {
         rateTimer = null;
-        cloudSet(["meta", "settings"], { rate: v });
+        cloudSet(["meta", "settings"], { rate: v }, true);
       }, 600);
+      return true;
+    },
+    setMembers: function (list) {
+      if (MODE === "local") {
+        S.members = list;
+        return commitLocal();
+      }
+      if (!cloudSet(["meta", "settings"], { members: list }, true))
+        return false;
+      S.members = list;
+      emit();
       return true;
     }
   };
 
   /* ---------- 共用資料庫連線（Firebase Firestore） ---------- */
+  // 共用資料庫和收據辨識用同一個 Firebase app
+  var appLoading = null;
+  function loadApp() {
+    if (!appLoading) {
+      appLoading = import(SDK_BASE + "firebase-app.js").then(function (m) {
+        return m.getApps().length ? m.getApp() : m.initializeApp(FB);
+      });
+      appLoading.catch(function () {
+        appLoading = null;
+      });
+    }
+    return appLoading;
+  }
   function startCloud() {
     Cloud.error = null;
     Cloud.meta = {};
     updateSync();
     if (!Cloud.loading) {
-      var base = "https://www.gstatic.com/firebasejs/" + SDK_VER + "/";
       Cloud.loading = Promise.all([
-        import(base + "firebase-app.js"),
-        import(base + "firebase-firestore.js")
+        loadApp(),
+        import(SDK_BASE + "firebase-firestore.js")
       ]).then(function (m) {
-        var app = m[0].initializeApp(FB),
+        var app = m[0],
           fs = m[1],
           db;
         try {
@@ -1935,15 +2130,18 @@
           S.expenses = snap.docs
             .map(function (d) {
               var x = d.data() || {};
-              return {
+              return cleanExp({
                 id: d.id,
                 key: String(x.key || ""),
                 amt: +x.amt || 0,
                 cat: x.cat,
-                note: String(x.note || ""),
-                by: String(x.by || ""),
-                t: +x.t || 0
-              };
+                note: x.note,
+                by: x.by,
+                t: x.t,
+                pay: x.pay,
+                rest: x.rest,
+                items: x.items
+              });
             })
             .filter(validExp);
           Cloud.meta.exp = snap.metadata;
@@ -1981,6 +2179,7 @@
             x.rate < 10
           )
             S.rate = x.rate;
+          S.members = cleanMembers(x && x.members);
           Cloud.meta.cfg = snap.metadata;
         }),
         onCloudError
@@ -2095,9 +2294,282 @@
   }
   function emit() {
     refreshDay();
+    fillPeople(panel);
     renderSummary();
+    renderSplit();
     renderTodo();
     if (document.activeElement !== rateEl) rateEl.value = String(S.rate);
+  }
+
+  /* 金額欄：接受全形數字、逗號、¥；空白回傳 0，看不懂回傳 -1 */
+  function parseYen(v) {
+    var raw = String(v)
+      .replace(/[０-９]/g, function (c) {
+        return String.fromCharCode(c.charCodeAt(0) - 0xfee0);
+      })
+      .replace(/[,，\s¥￥円]/g, "");
+    if (!raw) return 0;
+    return /^\d{1,8}$/.test(raw) ? parseInt(raw, 10) : -1;
+  }
+
+  /* 明細列 */
+  var itemSeq = 0;
+  function itemRowHTML(it) {
+    var id = "it" + ++itemSeq;
+    return (
+      '<div class="lg-it">' +
+      '<label class="sr" for="' +
+      id +
+      '-n">品項</label><input class="lg-it-n" id="' +
+      id +
+      '-n" type="text" maxlength="30" placeholder="品項" autocomplete="off" value="' +
+      esc(it.n || "") +
+      '">' +
+      '<div class="lg-it-amt"><span aria-hidden="true">¥</span><label class="sr" for="' +
+      id +
+      '-a">品項金額</label><input class="lg-it-a" id="' +
+      id +
+      '-a" type="text" inputmode="numeric" maxlength="9" placeholder="金額" autocomplete="off" value="' +
+      (it.amt || "") +
+      '"></div>' +
+      '<label class="sr" for="' +
+      id +
+      '-w">誰買的</label><select class="lg-sel lg-it-w" id="' +
+      id +
+      '-w" data-people="who" data-split></select>' +
+      '<button type="button" class="lg-it-del" aria-label="刪掉這項明細">' +
+      ico("i-x") +
+      "</button></div>"
+    );
+  }
+  function addItems(f, list, replace) {
+    var box = f.querySelector(".lg-items");
+    if (replace) box.innerHTML = "";
+    box.insertAdjacentHTML("beforeend", list.map(itemRowHTML).join(""));
+    fillPeople(box);
+    updateRest(f);
+  }
+  function readItems(f) {
+    return Array.prototype.map.call(f.querySelectorAll(".lg-it"), function (r) {
+      return {
+        row: r,
+        n: r.querySelector(".lg-it-n").value.trim().slice(0, 30),
+        amt: parseYen(r.querySelector(".lg-it-a").value),
+        who: r.querySelector(".lg-it-w").value
+      };
+    });
+  }
+  function updateRest(f) {
+    var its = readItems(f),
+      isum = 0;
+    its.forEach(function (it) {
+      if (it.amt > 0) isum += it.amt;
+    });
+    var amt = parseYen(f.elements.amt.value),
+      rest = amt - isum,
+      out = f.querySelector(".lg-rest-amt");
+    f.querySelector(".lg-rest-lab").textContent = its.length
+      ? "其餘的算"
+      : "這筆算";
+    out.textContent = !its.length
+      ? ""
+      : amt <= 0
+        ? "金額空著就用明細合計 " + yen(isum)
+        : rest < 0
+          ? "明細比金額多 " + yen(-rest)
+          : yen(rest);
+    out.classList.toggle("bad", its.length > 0 && amt > 0 && rest < 0);
+  }
+  function resetForm(f) {
+    f.elements.amt.value = "";
+    f.elements.note.value = "";
+    f.elements.rest.value = "";
+    f.querySelector(".lg-items").innerHTML = "";
+    f.querySelector(".lg-scanmsg").hidden = true;
+    updateRest(f);
+  }
+
+  /* ---------- 收據辨識（Firebase AI Logic + Gemini） ---------- */
+  var aiLoading = null;
+  function loadAI() {
+    if (!aiLoading) {
+      aiLoading = Promise.all([
+        loadApp(),
+        import(SDK_BASE + "firebase-ai.js")
+      ]).then(function (m) {
+        var A = m[1],
+          Sc = A.Schema;
+        return A.getGenerativeModel(
+          A.getAI(m[0], { backend: new A.GoogleAIBackend() }),
+          {
+            model: AI_MODEL,
+            generationConfig: {
+              responseMimeType: "application/json",
+              responseSchema: Sc.object({
+                properties: {
+                  store: Sc.string(),
+                  total: Sc.integer(),
+                  cat: Sc.enumString({
+                    enum: CATS.map(function (c) {
+                      return c.id;
+                    })
+                  }),
+                  items: Sc.array({
+                    items: Sc.object({
+                      properties: { n: Sc.string(), amt: Sc.integer() }
+                    })
+                  })
+                },
+                optionalProperties: ["store"]
+              })
+            }
+          }
+        );
+      });
+      aiLoading.catch(function () {
+        aiLoading = null;
+      });
+    }
+    return aiLoading;
+  }
+  var RECEIPT_PROMPT = [
+    "這是一張在日本拍的收據照片。請讀出：",
+    "- store：店名，照收據上的寫法。",
+    "- total：實際付款的總金額，日圓整數，含稅。不要用「お預り」「お釣り」這類收付現金的數字。",
+    "- items：每個購買的品項。n 是品名，翻成簡短的繁體中文，最多 15 個字；amt 是收據上印的該品項金額，日圓整數，同一品項買多個就用小計。折扣、割引請併進它所屬的品項，不要另外列。小計、稅額、合計這類列不要放進 items。",
+    "- cat：從 food（餐飲）、ticket（門票）、move（交通）、shop（購物）、stay（住宿）、etc（其他）挑一個最符合的。",
+    "如果照片不是收據，total 填 0，items 給空陣列。"
+  ].join("\n");
+  // 手機照片動輒好幾 MB，先縮小再上傳
+  function shrinkImage(file) {
+    return new Promise(function (ok, fail) {
+      var url = URL.createObjectURL(file),
+        img = new Image();
+      img.onload = function () {
+        var s = Math.min(
+            1,
+            2048 / Math.max(img.naturalWidth, img.naturalHeight)
+          ),
+          c = document.createElement("canvas");
+        c.width = Math.round(img.naturalWidth * s);
+        c.height = Math.round(img.naturalHeight * s);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        ok(c.toDataURL("image/jpeg", 0.85).split(",")[1]);
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        fail(new Error("image"));
+      };
+      img.src = url;
+    });
+  }
+  // 外稅、折扣會讓品項加總和合計對不上：差距在 15% 內就按比例攤到各品項
+  function spread(items, total) {
+    var base = sum(items),
+      diff = total - base,
+      acc = 0;
+    if (!base || !diff || Math.abs(diff) > base * 0.15) return false;
+    var out = items.map(function (it, i) {
+      var d =
+        i === items.length - 1
+          ? diff - acc
+          : Math.round((diff * it.amt) / base);
+      acc += d;
+      return it.amt + d;
+    });
+    if (
+      out.some(function (v) {
+        return v <= 0;
+      })
+    )
+      return false;
+    items.forEach(function (it, i) {
+      it.amt = out[i];
+    });
+    return true;
+  }
+  function aiErrText(err) {
+    var m =
+      String((err && err.code) || "") +
+      " " +
+      String((err && err.message) || "");
+    if (err && err.message === "image") return "這張照片打不開，換一張試試看。";
+    if (err instanceof SyntaxError) return "看不懂辨識結果，請再拍一次。";
+    if (/api-not-enabled|PERMISSION_DENIED|403|has not been used/i.test(m))
+      return "Firebase 專案還沒開啟 AI Logic，請到 Firebase 主控台開啟後再試。";
+    if (/quota|429|RESOURCE_EXHAUSTED/i.test(m))
+      return "辨識次數暫時用完了，請手動輸入，或晚點再試。";
+    if (/fetch|network|import|module/i.test(m))
+      return "連不上辨識服務，請確認網路後再試。";
+    return "辨識失敗，請再試一次，或手動輸入。";
+  }
+  function scanReceipt(f, file) {
+    var msg = f.querySelector(".lg-scanmsg"),
+      btn = f.querySelector(".lg-scan");
+    function say(t, bad) {
+      msg.textContent = t;
+      msg.hidden = !t;
+      msg.classList.toggle("bad", !!bad);
+    }
+    if (navigator.onLine === false) {
+      say("沒有網路，沒辦法辨識收據。", true);
+      return;
+    }
+    btn.disabled = true;
+    say("正在讀收據…");
+    Promise.all([loadAI(), shrinkImage(file)])
+      .then(function (r) {
+        return r[0].generateContent([
+          RECEIPT_PROMPT,
+          { inlineData: { data: r[1], mimeType: "image/jpeg" } }
+        ]);
+      })
+      .then(function (res) {
+        var x = JSON.parse(res.response.text()) || {},
+          total = Math.round(+x.total) || 0,
+          items = (Array.isArray(x.items) ? x.items : [])
+            .map(function (it) {
+              return {
+                n: String((it && it.n) || "")
+                  .trim()
+                  .slice(0, 30),
+                amt: Math.round(+(it && it.amt)) || 0
+              };
+            })
+            .filter(function (it) {
+              return it.amt > 0;
+            })
+            .slice(0, 40),
+          spreadOK = total > 0 && spread(items, total);
+        if (!total) total = sum(items);
+        if (!total) {
+          say("看不出金額，請手動輸入，或換一張清楚一點的照片。", true);
+          return;
+        }
+        f.elements.amt.value = String(total);
+        if (CATMAP[x.cat]) f.elements.cat.value = x.cat;
+        if (!f.elements.note.value.trim() && x.store)
+          f.elements.note.value = String(x.store).trim().slice(0, 40);
+        addItems(f, items, true);
+        f.querySelector(".lg-err").hidden = true;
+        say(
+          "讀到 " +
+            items.length +
+            " 項，合計 " +
+            yen(total) +
+            (spreadOK ? "，稅金和折扣已按比例分到各品項" : "") +
+            "。請對一下金額" +
+            (S.members.length ? "，再選每一項是誰買的。" : "。")
+        );
+      })
+      .catch(function (err) {
+        console.warn("[北海道] 收據辨識失敗", err);
+        say(aiErrText(err), true);
+      })
+      .then(function () {
+        btn.disabled = false;
+      });
   }
   panel.addEventListener("click", function (e) {
     var t = e.target.closest(".lg-toggle");
@@ -2114,7 +2586,29 @@
       return;
     }
     var d = e.target.closest(".lg-del");
-    if (d) removeEntry(+d.closest(".ledger").dataset.k, d.dataset.del);
+    if (d) {
+      removeEntry(+d.closest(".ledger").dataset.k, d.dataset.del);
+      return;
+    }
+    var f = e.target.closest(".lg-form");
+    if (!f) return;
+    if (e.target.closest(".lg-additem")) {
+      addItems(f, [{}]);
+      var rows = f.querySelectorAll(".lg-it-n");
+      rows[rows.length - 1].focus();
+    } else if (e.target.closest(".lg-it-del")) {
+      e.target.closest(".lg-it").remove();
+      updateRest(f);
+      f.querySelector(".lg-additem").focus();
+    } else if (e.target.closest(".lg-scan")) {
+      f.querySelector(".lg-file").click();
+    }
+  });
+  panel.addEventListener("change", function (e) {
+    if (!e.target.classList.contains("lg-file")) return;
+    var file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (file) scanReceipt(e.target.form, file);
   });
   panel.addEventListener("submit", function (e) {
     var f = e.target.closest(".lg-form");
@@ -2123,18 +2617,31 @@
     var amtEl = f.elements.amt,
       noteEl = f.elements.note,
       err = f.querySelector(".lg-err");
-    var raw = amtEl.value
-      .replace(/[０-９]/g, function (c) {
-        return String.fromCharCode(c.charCodeAt(0) - 0xfee0);
-      })
-      .replace(/[,，\s¥￥円]/g, "");
-    var amt = /^\d{1,8}$/.test(raw) ? parseInt(raw, 10) : 0;
-    if (!amt) {
+    function fail(msg, focusEl) {
+      err.textContent = msg;
       err.hidden = false;
-      amtEl.focus();
-      return;
+      focusEl.focus();
     }
+    var items = [],
+      isum = 0,
+      bad = null;
+    readItems(f).forEach(function (it) {
+      if (it.amt > 0) {
+        isum += it.amt;
+        items.push({ n: it.n, amt: it.amt, who: it.who });
+      } else if (it.n || it.amt < 0) bad = bad || it.row;
+    });
+    var amt = parseYen(amtEl.value);
+    if (amt === 0 && isum) amt = isum;
+    if (amt <= 0) return fail("請輸入金額，例如 1200", amtEl);
+    if (bad) return fail("明細的金額要填數字", bad.querySelector(".lg-it-a"));
+    if (isum > amt)
+      return fail(
+        "明細加起來 " + yen(isum) + "，比金額 " + yen(amt) + " 多，請再對一下",
+        amtEl
+      );
     err.hidden = true;
+    var split = S.members.length > 0;
     var entry = {
       id: "e" + uid(),
       key: stopKey(current, +f.dataset.k),
@@ -2142,17 +2649,18 @@
       cat: f.elements.cat.value || "etc",
       note: noteEl.value.trim().slice(0, 40),
       by: MODE === "cloud" ? myName : "",
-      t: Date.now()
+      t: Date.now(),
+      pay: split ? f.elements.pay.value : "",
+      rest: split ? f.elements.rest.value : "",
+      items: items
     };
-    if (DB.addExpense(entry)) {
-      amtEl.value = "";
-      noteEl.value = "";
-    }
+    if (DB.addExpense(entry)) resetForm(f);
   });
   panel.addEventListener("input", function (e) {
-    if (e.target.name === "amt" && e.target.form) {
-      e.target.form.querySelector(".lg-err").hidden = true;
-    }
+    var f = e.target.form;
+    if (!f || !f.classList.contains("lg-form")) return;
+    f.querySelector(".lg-err").hidden = true;
+    updateRest(f);
   });
   function removeEntry(k, id) {
     var hit = null;
@@ -2264,6 +2772,182 @@
     });
   });
 
+  /* ---------- 分帳 ---------- */
+  function allEntries() {
+    var out = [];
+    DAYS.forEach(function (d, di) {
+      d.stops.forEach(function (s, k) {
+        out = out.concat(entries(stopKey(di, k)));
+      });
+    });
+    return out;
+  }
+  /* 每個人「付了多少」減「該出多少」就是差額；再讓欠錢的人依序還給該收錢的人，轉帳次數最少 */
+  function settle() {
+    var names = S.members.slice(),
+      paid = {},
+      owe = {},
+      skipped = 0;
+    function add(map, n, a) {
+      map[n] = (map[n] || 0) + a;
+      if (names.indexOf(n) < 0) names.push(n);
+    }
+    allEntries().forEach(function (e) {
+      var payer = payerOf(e);
+      if (!payer) {
+        skipped++;
+        return;
+      }
+      function give(who, a) {
+        if (who !== "*") return add(owe, who || payer, a);
+        var m = S.members.length ? S.members : [payer],
+          each = Math.floor(a / m.length),
+          extra = a - each * m.length;
+        m.forEach(function (n, i) {
+          add(owe, n, each + (i < extra ? 1 : 0));
+        });
+      }
+      add(paid, payer, e.amt);
+      e.items.forEach(function (it) {
+        give(it.who, it.amt);
+      });
+      var rest = e.amt - sum(e.items);
+      if (rest) give(e.rest, rest);
+    });
+    var cred = [],
+      debt = [];
+    names.forEach(function (n) {
+      var b = (paid[n] || 0) - (owe[n] || 0);
+      if (b > 0) cred.push({ n: n, v: b });
+      else if (b < 0) debt.push({ n: n, v: -b });
+    });
+    function big(a, b) {
+      return b.v - a.v;
+    }
+    cred.sort(big);
+    debt.sort(big);
+    var moves = [],
+      i = 0,
+      j = 0;
+    while (i < debt.length && j < cred.length) {
+      var v = Math.min(debt[i].v, cred[j].v);
+      moves.push({ from: debt[i].n, to: cred[j].n, v: v });
+      debt[i].v -= v;
+      cred[j].v -= v;
+      if (!debt[i].v) i++;
+      if (!cred[j].v) j++;
+    }
+    return {
+      names: names,
+      paid: paid,
+      owe: owe,
+      moves: moves,
+      skipped: skipped
+    };
+  }
+  function renderSplit() {
+    el("spMembers").innerHTML = S.members
+      .map(function (n) {
+        return (
+          "<li><span>" +
+          esc(n) +
+          '</span><button type="button" data-name="' +
+          esc(n) +
+          '" aria-label="從名單移除 ' +
+          esc(n) +
+          '">' +
+          ico("i-x") +
+          "</button></li>"
+        );
+      })
+      .join("");
+    var r = settle(),
+      active = r.names.filter(function (n) {
+        return r.paid[n] || r.owe[n];
+      });
+    el("spEmpty").hidden = S.members.length > 0;
+    el("spBody").hidden = !active.length;
+    if (!active.length) return;
+    el("spBal").innerHTML = active
+      .map(function (n) {
+        var b = (r.paid[n] || 0) - (r.owe[n] || 0);
+        return (
+          "<li><b>" +
+          esc(n) +
+          '</b><span class="net' +
+          (b > 0 ? " pos" : b < 0 ? " neg" : "") +
+          '">' +
+          (b > 0 ? "該收 " + yen(b) : b < 0 ? "該付 " + yen(-b) : "剛好") +
+          "</span><small>付了 " +
+          yen(r.paid[n] || 0) +
+          "・自己的部分 " +
+          yen(r.owe[n] || 0) +
+          "</small></li>"
+        );
+      })
+      .join("");
+    el("spMoves").innerHTML = r.moves.length
+      ? r.moves
+          .map(function (m) {
+            return (
+              "<li><b>" +
+              esc(m.from) +
+              "</b><span>給</span><b>" +
+              esc(m.to) +
+              '</b><span class="amt">' +
+              yen(m.v) +
+              "<small>約 " +
+              twd(m.v) +
+              "</small></span></li>"
+            );
+          })
+          .join("")
+      : '<li class="ok">大家都算清了，不用互相給錢。</li>';
+    el("spSkip").hidden = !r.skipped;
+    el("spSkip").textContent =
+      "有 " + r.skipped + " 筆沒有填誰付的，沒有算進分帳。";
+  }
+  el("spAdd").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var input = el("spName"),
+      n = cleanName(input.value),
+      err = el("spErr");
+    var msg = !n
+      ? "請輸入名字。"
+      : n === "*"
+        ? "名字不能只有 *。"
+        : S.members.indexOf(n) >= 0
+          ? n + " 已經在名單裡了。"
+          : S.members.length >= 20
+            ? "名單最多 20 人。"
+            : "";
+    err.textContent = msg;
+    err.hidden = !msg;
+    if (msg) {
+      input.focus();
+      return;
+    }
+    if (DB.setMembers(S.members.concat(n))) input.value = "";
+  });
+  el("spName").addEventListener("input", function () {
+    el("spErr").hidden = true;
+  });
+  el("spMembers").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-name]");
+    if (!b) return;
+    var n = b.dataset.name;
+    if (
+      DB.setMembers(
+        S.members.filter(function (x) {
+          return x !== n;
+        })
+      )
+    ) {
+      el("spName").focus({ preventScroll: true });
+      showToast("已把 " + n + " 移出名單，之前記在這個名字的帳還是照算。");
+    }
+  });
+
   var rateEl = el("rate");
   rateEl.addEventListener("input", function () {
     var v = parseFloat(rateEl.value);
@@ -2283,6 +2967,7 @@
         entries(stopKey(di, k)).forEach(function (e) {
           var a = +e.amt || 0;
           t += a;
+          var payer = payerOf(e);
           rows.push(
             "・" +
               s.n +
@@ -2291,8 +2976,19 @@
               " " +
               yen(a) +
               (e.note ? "（" + e.note + "）" : "") +
-              (e.by ? "・" + e.by : "")
+              (payer ? "・" + payer + (e.pay ? " 付" : "") : "")
           );
+          e.items.forEach(function (it) {
+            rows.push(
+              "　－ " +
+                (it.n || "品項") +
+                " " +
+                yen(it.amt) +
+                "（" +
+                whoLab(it.who, e) +
+                "）"
+            );
+          });
         });
       });
       if (rows.length) {
@@ -2308,6 +3004,13 @@
       "",
       "總計 " + yen(total) + "，約 " + twd(total) + "（匯率 " + S.rate + "）"
     );
+    var r = settle();
+    if (r.moves.length) {
+      lines.push("", "分帳");
+      r.moves.forEach(function (m) {
+        lines.push("・" + m.from + " 給 " + m.to + " " + yen(m.v));
+      });
+    }
     return lines.join("\n");
   }
   function copyText(text, ta, msg, okMsg, failMsg) {
@@ -2415,6 +3118,13 @@
     myName = this.value.trim().slice(0, 12);
     store.set("hkd-name", myName);
   });
+  // 填好名字就順便加進分帳名單
+  el("myName").addEventListener("change", function () {
+    var n = cleanName(myName);
+    if (MODE === "cloud" && !Cloud.db) return;
+    if (n && n !== "*" && S.members.indexOf(n) < 0 && S.members.length < 20)
+      DB.setMembers(S.members.concat(n));
+  });
   el("shMigYes").addEventListener("click", function () {
     if (!cloudOK()) return;
     var L = readLocal(),
@@ -2429,10 +3139,16 @@
           cat: catOf(e.cat).id,
           note: e.note,
           by: e.by || myName,
-          t: e.t || Date.now()
+          t: e.t || Date.now(),
+          pay: e.pay,
+          rest: e.rest,
+          items: e.items
         })
       );
     });
+    var mem = cleanMembers(S.members.concat(L.members));
+    if (mem.length > S.members.length)
+      b.set(ref(["meta", "settings"]), { members: mem }, { merge: true });
     L.custom.forEach(function (c) {
       customIds[c.id] = 1;
       b.set(ref(["todo", c.id]), {
@@ -2451,7 +3167,8 @@
       expenses: [],
       done: {},
       custom: [],
-      rate: L.rate
+      rate: L.rate,
+      members: L.members
     });
     el("shMigrate").hidden = true;
     showToast("已把這台裝置的資料加進共用帳本。");
@@ -2493,6 +3210,7 @@
   renderShare();
   renderTodo();
   renderSummary();
+  renderSplit();
   updateSync();
   if (MODE === "cloud") startCloud();
 

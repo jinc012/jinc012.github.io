@@ -12,5 +12,9 @@ window.TRIP_CONFIG = {
     storageBucket: "hokkaido-2027-d753b.firebasestorage.app",
     messagingSenderId: "374237512825",
     appId: "1:374237512825:web:2fe3d7497410572eba80a8"
+  },
+  // 掃收據用的 Gemini 模型；Google 停用這個模型時，換成 Firebase AI Logic 文件列的新模型名稱
+  ai: {
+    model: "gemini-3.5-flash"
   }
 };
