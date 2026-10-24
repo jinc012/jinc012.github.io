@@ -2050,14 +2050,39 @@
   var appLoading = null;
   function loadApp() {
     if (!appLoading) {
-      appLoading = import(SDK_BASE + "firebase-app.js").then(function (m) {
-        return m.getApps().length ? m.getApp() : m.initializeApp(FB);
-      });
+      appLoading = import(SDK_BASE + "firebase-app.js")
+        .then(function (m) {
+          return m.getApps().length ? m.getApp() : m.initializeApp(FB);
+        })
+        .then(startAppCheck);
       appLoading.catch(function () {
         appLoading = null;
       });
     }
     return appLoading;
+  }
+  /* App Check：用 reCAPTCHA 證明請求來自這個網站，別人拿到 config.js 也用不了 AI 和資料庫。
+     要在其他 Firebase 服務之前啟動；本機測試改用 debug token（見 config.js） */
+  function startAppCheck(app) {
+    var AC = CFG.appCheck || {};
+    if (!AC.siteKey) return app;
+    if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname))
+      self.FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+    return import(SDK_BASE + "firebase-app-check.js").then(function (m) {
+      try {
+        m.initializeAppCheck(app, {
+          provider:
+            AC.provider === "v3"
+              ? new m.ReCaptchaV3Provider(AC.siteKey)
+              : new m.ReCaptchaEnterpriseProvider(AC.siteKey),
+          isTokenAutoRefreshEnabled: true
+        });
+      } catch (err) {
+        // 重試載入時已經啟動過了
+        if (!/already-initialized/.test(String(err && err.code))) throw err;
+      }
+      return app;
+    });
   }
   function startCloud() {
     Cloud.error = null;
@@ -2489,18 +2514,34 @@
     });
     return true;
   }
+  // Firebase AI 的錯誤訊息都是「Error fetching from …: [狀態碼] 原因」，要看狀態碼和原因才知道出了什麼事
   function aiErrText(err) {
     var m =
-      String((err && err.code) || "") +
-      " " +
-      String((err && err.message) || "");
+        String((err && err.code) || "") +
+        " " +
+        String((err && err.message) || ""),
+      st =
+        (err && err.customErrorData && err.customErrorData.status) ||
+        +(/\[(\d{3})/.exec(m) || [])[1] ||
+        0;
     if (err && err.message === "image") return "這張照片打不開，換一張試試看。";
     if (err instanceof SyntaxError) return "看不懂辨識結果，請再拍一次。";
-    if (/api-not-enabled|PERMISSION_DENIED|403|has not been used/i.test(m))
+    if (/app.?check/i.test(m) || st === 401)
+      return "App Check 驗證沒過，辨識服務拒絕了這次請求。請確認 js/config.js 的 appCheck 金鑰，以及 Firebase 主控台已經註冊這個網站。";
+    if (/api-not-enabled|has not been used|SERVICE_DISABLED/i.test(m))
       return "Firebase 專案還沒開啟 AI Logic，請到 Firebase 主控台開啟後再試。";
-    if (/quota|429|RESOURCE_EXHAUSTED/i.test(m))
+    if (st === 429 || /quota|RESOURCE_EXHAUSTED/i.test(m))
       return "辨識次數暫時用完了，請手動輸入，或晚點再試。";
-    if (/fetch|network|import|module/i.test(m))
+    if (st === 404)
+      return (
+        "找不到辨識模型 " +
+        AI_MODEL +
+        "，可能已經停用，請到 js/config.js 換新的模型名稱。"
+      );
+    if (st === 403)
+      return "辨識服務拒絕存取（403），請確認 API 金鑰的網站限制有包含這個網址。";
+    if (st) return "辨識服務回傳錯誤（" + st + "），請再試一次，或手動輸入。";
+    if (navigator.onLine === false || /fetch|network|import|module/i.test(m))
       return "連不上辨識服務，請確認網路後再試。";
     return "辨識失敗，請再試一次，或手動輸入。";
   }
