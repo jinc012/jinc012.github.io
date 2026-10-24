@@ -2282,7 +2282,7 @@
     if (st === "error") {
       var c = Cloud.error && Cloud.error.code;
       return c === "permission-denied"
-        ? "共用資料庫拒絕存取。請到 Firebase 主控台確認 Firestore 規則已照 README 貼上並發布。"
+        ? "共用資料庫拒絕了這次寫入，通常是 Firestore 規則還沒更新到最新版。請到 Firebase 主控台更新規則並發布，再重新整理頁面。"
         : "同步時發生錯誤（" +
             String(c || (Cloud.error && Cloud.error.message) || "未知") +
             "），重新整理頁面試試看。";
