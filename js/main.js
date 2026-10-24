@@ -873,6 +873,7 @@
   var AI_MODEL = (CFG.ai && CFG.ai.model) || "gemini-3.5-flash";
   var CODE_RE = /^[a-z0-9]{24,64}$/;
   var myName = String(store.get("hkd-name") || "").slice(0, 12);
+  var lastCur = store.get("hkd-cur") === "TWD" ? "TWD" : "JPY";
   var canSave = (function () {
     try {
       localStorage.setItem("hkd-t", "1");
@@ -968,7 +969,8 @@
       t: +e.t || 0,
       pay: String(e.pay || "").slice(0, 20),
       rest: String(e.rest || "").slice(0, 20),
-      items: cleanItems(e.items)
+      items: cleanItems(e.items),
+      cur: e.cur === "TWD" ? "TWD" : "JPY"
     };
   }
   function normalize(L) {
@@ -1048,6 +1050,21 @@
   }
   function twd(n) {
     return "NT$" + Math.round(n * S.rate).toLocaleString("zh-TW");
+  }
+  /* 每筆帳可以記日幣或台幣（cur）；加總、分帳一律換成日幣，用目前的匯率 */
+  function money(n, cur) {
+    return cur === "TWD" ? "NT$" + n.toLocaleString("zh-TW") : yen(n);
+  }
+  function toYen(n, cur) {
+    return cur === "TWD" ? Math.round(n / S.rate) : n;
+  }
+  function yenOf(e) {
+    return toYen(+e.amt || 0, e.cur);
+  }
+  function sumYen(list) {
+    return list.reduce(function (a, e) {
+      return a + yenOf(e);
+    }, 0);
   }
   function stopKey(di, k) {
     var d = DAYS[di],
@@ -1131,14 +1148,14 @@
   function dayTotal(di) {
     var t = 0;
     DAYS[di].stops.forEach(function (s, k) {
-      t += sum(entries(stopKey(di, k)));
+      t += sumYen(entries(stopKey(di, k)));
     });
     return t;
   }
   function toggleLabel(list) {
     return list.length
       ? '<span class="sr">記帳：</span>' +
-          yen(sum(list)) +
+          yen(sumYen(list)) +
           "・" +
           list.length +
           " 筆"
@@ -1191,14 +1208,17 @@
                 "</small>"
               : "") +
             "</span><b>" +
-            yen(a) +
+            money(a, e.cur) +
+            (e.cur === "TWD"
+              ? '<small class="lg-conv">約 ' + yen(yenOf(e)) + "</small>"
+              : "") +
             "</b>" +
             '<button type="button" class="lg-del" data-del="' +
             esc(e.id) +
             '" aria-label="刪除 ' +
             c.lab +
             " " +
-            yen(a) +
+            money(a, e.cur) +
             '">' +
             ico("i-x") +
             "</button>" +
@@ -1212,7 +1232,7 @@
                       "</span><small>" +
                       esc(whoLab(it.who, e)) +
                       "</small><b>" +
-                      yen(it.amt) +
+                      money(it.amt, e.cur) +
                       "</b></li>"
                     );
                   })
@@ -1221,7 +1241,7 @@
                   ? "<li><span>其餘</span><small>" +
                     esc(whoLab(e.rest, e)) +
                     "</small><b>" +
-                    yen(rest) +
+                    money(rest, e.cur) +
                     "</b></li>"
                   : "") +
                 "</ul>"
@@ -1232,7 +1252,7 @@
         .join("") +
       (list.length > 1
         ? '<li class="lg-sub"><span>小計</span><b>' +
-          yen(sum(list)) +
+          yen(sumYen(list)) +
           "</b></li>"
         : "")
     );
@@ -1250,14 +1270,25 @@
       '<div class="lg-row">' +
       '<div class="lg-amt"><label class="sr" for="' +
       id +
-      '-amt">金額（日圓）</label><span class="yen" aria-hidden="true">¥</span>' +
+      '-cur">幣別</label><select class="lg-cur" id="' +
+      id +
+      '-cur" name="cur">' +
+      '<option value="JPY"' +
+      (lastCur === "TWD" ? "" : " selected") +
+      ">¥</option>" +
+      '<option value="TWD"' +
+      (lastCur === "TWD" ? " selected" : "") +
+      ">NT$</option></select>" +
+      '<label class="sr" for="' +
+      id +
+      '-amt">金額</label>' +
       '<input id="' +
       id +
       '-amt" name="amt" type="text" inputmode="numeric" autocomplete="off" placeholder="金額" maxlength="10"></div>' +
       (HAS_CLOUD
-        ? '<button type="button" class="lg-scan">' +
+        ? '<button type="button" class="lg-scan" aria-label="掃描收據">' +
           ico("i-camera") +
-          '掃收據</button><input type="file" class="lg-file" accept="image/*" hidden>'
+          '收據</button><input type="file" class="lg-file" accept="image/*" hidden>'
         : "") +
       "</div>" +
       '<p class="lg-scanmsg" role="status" hidden></p>' +
@@ -1967,7 +1998,8 @@
       t: e.t || Date.now(),
       pay: e.pay || "",
       rest: e.rest || "",
-      items: cleanItems(e.items)
+      items: cleanItems(e.items),
+      cur: e.cur === "TWD" ? "TWD" : "JPY"
     };
   }
   var DB = {
@@ -2024,7 +2056,7 @@
         return commitLocal();
       }
       S.rate = v;
-      renderSummary();
+      emit();
       clearTimeout(rateTimer);
       rateTimer = setTimeout(function () {
         rateTimer = null;
@@ -2165,7 +2197,8 @@
                 t: x.t,
                 pay: x.pay,
                 rest: x.rest,
-                items: x.items
+                items: x.items,
+                cur: x.cur
               });
             })
             .filter(validExp);
@@ -2350,7 +2383,7 @@
       '-n" type="text" maxlength="30" placeholder="品項" autocomplete="off" value="' +
       esc(it.n || "") +
       '">' +
-      '<div class="lg-it-amt"><span aria-hidden="true">¥</span><label class="sr" for="' +
+      '<div class="lg-it-amt"><span class="lg-it-sym" aria-hidden="true">¥</span><label class="sr" for="' +
       id +
       '-a">品項金額</label><input class="lg-it-a" id="' +
       id +
@@ -2391,18 +2424,25 @@
       if (it.amt > 0) isum += it.amt;
     });
     var amt = parseYen(f.elements.amt.value),
+      cur = f.elements.cur.value,
       rest = amt - isum,
       out = f.querySelector(".lg-rest-amt");
+    Array.prototype.forEach.call(
+      f.querySelectorAll(".lg-it-sym"),
+      function (s) {
+        s.textContent = cur === "TWD" ? "NT$" : "¥";
+      }
+    );
     f.querySelector(".lg-rest-lab").textContent = its.length
       ? "其餘的算"
       : "這筆算";
     out.textContent = !its.length
       ? ""
       : amt <= 0
-        ? "金額空著就用明細合計 " + yen(isum)
+        ? "金額空著就用明細合計 " + money(isum, cur)
         : rest < 0
-          ? "明細比金額多 " + yen(-rest)
-          : yen(rest);
+          ? "明細比金額多 " + money(-rest, cur)
+          : money(rest, cur);
     out.classList.toggle("bad", its.length > 0 && amt > 0 && rest < 0);
   }
   function resetForm(f) {
@@ -2433,6 +2473,7 @@
               responseSchema: Sc.object({
                 properties: {
                   store: Sc.string(),
+                  cur: Sc.enumString({ enum: ["JPY", "TWD"] }),
                   total: Sc.integer(),
                   cat: Sc.enumString({
                     enum: CATS.map(function (c) {
@@ -2458,10 +2499,11 @@
     return aiLoading;
   }
   var RECEIPT_PROMPT = [
-    "這是一張在日本拍的收據照片。請讀出：",
+    "這是一張收據照片，通常是在日本拍的，也可能是台灣的收據或發票。請讀出：",
     "- store：店名，照收據上的寫法。",
-    "- total：實際付款的總金額，日圓整數，含稅。不要用「お預り」「お釣り」這類收付現金的數字。",
-    "- items：每個購買的品項。n 是品名，翻成簡短的繁體中文，最多 15 個字；amt 是收據上印的該品項金額，日圓整數，同一品項買多個就用小計。折扣、割引請併進它所屬的品項，不要另外列。小計、稅額、合計這類列不要放進 items。",
+    "- cur：收據的幣別，日圓填 JPY，新台幣填 TWD。",
+    "- total：實際付款的總金額，用收據的幣別，整數，含稅。不要用「お預り」「お釣り」「找零」這類收付現金的數字。",
+    "- items：每個購買的品項。n 是品名，翻成簡短的繁體中文，最多 15 個字；amt 是收據上印的該品項金額，用收據的幣別，整數，同一品項買多個就用小計。折扣、割引請併進它所屬的品項，不要另外列。小計、稅額、合計這類列不要放進 items。",
     "- cat：從 food（餐飲）、ticket（門票）、move（交通）、shop（購物）、stay（住宿）、etc（其他）挑一個最符合的。",
     "如果照片不是收據，total 填 0，items 給空陣列。"
   ].join("\n");
@@ -2588,7 +2630,9 @@
           say("看不出金額，請手動輸入，或換一張清楚一點的照片。", true);
           return;
         }
+        var cur = x.cur === "TWD" ? "TWD" : "JPY";
         f.elements.amt.value = String(total);
+        f.elements.cur.value = cur;
         if (CATMAP[x.cat]) f.elements.cat.value = x.cat;
         if (!f.elements.note.value.trim() && x.store)
           f.elements.note.value = String(x.store).trim().slice(0, 40);
@@ -2598,7 +2642,7 @@
           "讀到 " +
             items.length +
             " 項，合計 " +
-            yen(total) +
+            money(total, cur) +
             (spreadOK ? "，稅金和折扣已按比例分到各品項" : "") +
             "。請對一下金額" +
             (S.members.length ? "，再選每一項是誰買的。" : "。")
@@ -2672,16 +2716,23 @@
         items.push({ n: it.n, amt: it.amt, who: it.who });
       } else if (it.n || it.amt < 0) bad = bad || it.row;
     });
-    var amt = parseYen(amtEl.value);
+    var amt = parseYen(amtEl.value),
+      cur = f.elements.cur.value === "TWD" ? "TWD" : "JPY";
     if (amt === 0 && isum) amt = isum;
     if (amt <= 0) return fail("請輸入金額，例如 1200", amtEl);
     if (bad) return fail("明細的金額要填數字", bad.querySelector(".lg-it-a"));
     if (isum > amt)
       return fail(
-        "明細加起來 " + yen(isum) + "，比金額 " + yen(amt) + " 多，請再對一下",
+        "明細加起來 " +
+          money(isum, cur) +
+          "，比金額 " +
+          money(amt, cur) +
+          " 多，請再對一下",
         amtEl
       );
     err.hidden = true;
+    lastCur = cur;
+    store.set("hkd-cur", cur);
     var split = S.members.length > 0;
     var entry = {
       id: "e" + uid(),
@@ -2693,7 +2744,8 @@
       t: Date.now(),
       pay: split ? f.elements.pay.value : "",
       rest: split ? f.elements.rest.value : "",
-      items: items
+      items: items,
+      cur: cur
     };
     if (DB.addExpense(entry)) resetForm(f);
   });
@@ -2713,9 +2765,12 @@
       '.lg-toggle[aria-controls="lg' + current + "-" + k + '"]'
     );
     if (tg) tg.focus({ preventScroll: true });
-    showToast("已刪除 " + catOf(hit.cat).lab + " " + yen(+hit.amt || 0), {
-      e: hit
-    });
+    showToast(
+      "已刪除 " + catOf(hit.cat).lab + " " + money(+hit.amt || 0, hit.cur),
+      {
+        e: hit
+      }
+    );
   }
 
   /* ---------- 旅費總覽 ---------- */
@@ -2728,7 +2783,7 @@
       var t = 0;
       d.stops.forEach(function (s, k) {
         entries(stopKey(di, k)).forEach(function (e) {
-          var a = +e.amt || 0,
+          var a = yenOf(e),
             c = catOf(e.cat).id;
           t += a;
           n++;
@@ -2848,12 +2903,16 @@
           add(owe, n, each + (i < extra ? 1 : 0));
         });
       }
-      add(paid, payer, e.amt);
+      // 台幣的帳換成日幣再算；明細各自換算，四捨五入的差額留在「其餘」，總數才對得上
+      var total = yenOf(e),
+        isum = 0;
+      add(paid, payer, total);
       e.items.forEach(function (it) {
-        give(it.who, it.amt);
+        var a = toYen(it.amt, e.cur);
+        isum += a;
+        give(it.who, a);
       });
-      var rest = e.amt - sum(e.items);
-      if (rest) give(e.rest, rest);
+      if (total - isum) give(e.rest, total - isum);
     });
     var cred = [],
       debt = [];
@@ -3007,7 +3066,7 @@
       d.stops.forEach(function (s, k) {
         entries(stopKey(di, k)).forEach(function (e) {
           var a = +e.amt || 0;
-          t += a;
+          t += yenOf(e);
           var payer = payerOf(e);
           rows.push(
             "・" +
@@ -3015,7 +3074,8 @@
               "｜" +
               catOf(e.cat).lab +
               " " +
-              yen(a) +
+              money(a, e.cur) +
+              (e.cur === "TWD" ? "（約 " + yen(yenOf(e)) + "）" : "") +
               (e.note ? "（" + e.note + "）" : "") +
               (payer ? "・" + payer + (e.pay ? " 付" : "") : "")
           );
@@ -3024,7 +3084,7 @@
               "　－ " +
                 (it.n || "品項") +
                 " " +
-                yen(it.amt) +
+                money(it.amt, e.cur) +
                 "（" +
                 whoLab(it.who, e) +
                 "）"
@@ -3183,7 +3243,8 @@
           t: e.t || Date.now(),
           pay: e.pay,
           rest: e.rest,
-          items: e.items
+          items: e.items,
+          cur: e.cur
         })
       );
     });
